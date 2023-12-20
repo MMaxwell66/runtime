@@ -315,7 +315,7 @@ SHARED_API int HOSTPOLICY_CALLTYPE corehost_load(const host_interface_t* init)
 
     g_init = hostpolicy_init_t{};
 
-    if (!hostpolicy_init_t::init(init, &g_init))
+    if (!hostpolicy_init_t::init(init, &g_init)) // 基本上就是把hostfxr传过来的init写入到g_init里面。
     {
         g_init_done = false;
         return StatusCode::LibHostInitFailure;

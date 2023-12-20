@@ -46,7 +46,7 @@ inline void *GetTopMemoryAddress(void)
 inline void *GetBotMemoryAddress(void)
 {
     static void *result; // = NULL;
-    if( NULL == result )
+    if( NULL == result )    // 为什么不在static init的时候处理掉...
     {
         SYSTEM_INFO sysInfo;
         GetSystemInfo( &sysInfo );
@@ -61,7 +61,7 @@ inline void *GetBotMemoryAddress(void)
 bool VMToOSInterface::CreateDoubleMemoryMapper(void **pHandle, size_t *pMaxExecutableCodeSize)
 {
     *pMaxExecutableCodeSize = (size_t)MaxDoubleMappedSize;
-    *pHandle = CreateFileMapping(
+    *pHandle = CreateFileMapping(           // 虽然是和win32编程相关的，但是根据windbg显示，这个时候还没有在地址空间中reserve一块区域，可能要MapViewOfFile之后才会真正reserve
                  INVALID_HANDLE_VALUE,    // use paging file
                  NULL,                    // default security
                  PAGE_EXECUTE_READWRITE |  SEC_RESERVE,  // read/write/execute access
@@ -146,7 +146,7 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
         // Note that for most versions of UNIX the mbInfo.RegionSize returned will always be 0
         if ((mbInfo.State == MEM_FREE) &&
             (mbInfo.RegionSize >= (SIZE_T) size || mbInfo.RegionSize == 0))
-        {
+        {   // windbg shows `MEM_MAPPED  MEM_RESERVE  MappedFile "PageFile"`
             // Try reserving the memory using VirtualAlloc now
             pResult = (BYTE*)MapViewOfFileEx((HANDLE)mapperHandle,
                         FILE_MAP_EXECUTE | FILE_MAP_READ | FILE_MAP_WRITE,

@@ -21,7 +21,7 @@ namespace
         bool release_only)
     {
         fx_ver_t best_match_version;
-
+        // 这个if是不是用来保险的？因为如果是 < 也就是 exactly, 之前就处理掉了。
         if (fx_ref.get_version_compatibility_range() >= version_compatibility_range_t::patch)
         {
             // Roll to highest version should have no effect on patch compatibility range as that has special rules
@@ -183,7 +183,7 @@ namespace
 
         return best_match;
     }
-
+    // 这个函数尝试从所有的 dotnet dir (新版本只有 install 那个) search fx_ref 最适合的版本
     fx_definition_t* resolve_framework_reference(
         const fx_reference_t & fx_ref,
         const pal::string_t & oldest_requested_version,
@@ -203,7 +203,7 @@ namespace
             fx_ref.get_fx_name().c_str(), fx_ref.get_fx_version().c_str());
 
         std::vector<pal::string_t> hive_dir;
-        get_framework_and_sdk_locations(dotnet_dir, disable_multilevel_lookup, &hive_dir);
+        get_framework_and_sdk_locations(dotnet_dir, disable_multilevel_lookup, &hive_dir); // for .NET 7+, = dotnet_dir
 
         pal::string_t selected_fx_dir;
         pal::string_t selected_fx_version;
@@ -255,7 +255,7 @@ namespace
                         version_list.push_back(ver);
                     }
                 }
-
+                // 核心的硬盘上查找逻辑在下面这个function call里面
                 fx_ver_t resolved_ver = resolve_framework_reference_from_version_list(version_list, fx_ref);
                 while (resolved_ver != fx_ver_t())
                 {
@@ -267,7 +267,7 @@ namespace
                     // scenario (.deps.json exists), only check after resolving the version and if the .deps.json doesn't
                     // exist, attempt resolving again without that version.
                     if (!library_exists_in_dir(resolved_fx_dir, deps_file_name, nullptr))
-                    {
+                    {   // 看上面的comment，这是一个优化，以避免去判断每一个version的合法性，一般情况下只需要判断最合适的version的合法性，然后合法就ok了。
                         // Remove the version and try resolving again
                         trace::verbose(_X("Ignoring FX version [%s] without .deps.json"), resolved_ver_str.c_str());
                         version_list.erase(std::find(version_list.cbegin(), version_list.cend(), resolved_ver));
@@ -275,7 +275,7 @@ namespace
                     }
                     else
                     {
-                        if (selected_ver != fx_ver_t())
+                        if (selected_ver != fx_ver_t()) // 这是multi-level相关的，.NET7之后好像就不支持了。
                         {
                             // Compare the previous hive_dir selection with the current hive_dir to see which one is the better match
                             resolved_ver = resolve_framework_reference_from_version_list({ resolved_ver, selected_ver }, fx_ref);
@@ -320,7 +320,7 @@ StatusCode fx_resolver_t::reconcile_fx_references_helper(
     }
 
     effective_fx_ref = fx_reference_t(higher_fx_ref); // copy
-    effective_fx_ref.merge_roll_forward_settings_from(lower_fx_ref);
+    effective_fx_ref.merge_roll_forward_settings_from(lower_fx_ref);    // 这里是导致FrameworkCompatRetry的一个经常的case，roll_forward的要求是合并的
 
     display_compatible_framework_trace(higher_fx_ref.get_fx_version(), lower_fx_ref);
     return StatusCode::Success;
@@ -336,7 +336,7 @@ StatusCode fx_resolver_t::reconcile_fx_references_helper(
 //   - Validate that the two references are compatible, of not it returns appropriate error code
 //   - Pick the higher version from the two references and use that in the effective reference
 //   - Merge roll forward settings and use the result in the effective reference
-StatusCode fx_resolver_t::reconcile_fx_references(
+StatusCode fx_resolver_t::reconcile_fx_references( // 检查 version 是否兼容，如果兼容 forward 到更新的版本
     const fx_reference_t& fx_ref_a,
     const fx_reference_t& fx_ref_b,
     /*out*/ fx_reference_t& effective_fx_ref)
@@ -355,16 +355,16 @@ StatusCode fx_resolver_t::reconcile_fx_references(
 
 void fx_resolver_t::update_newest_references(
     const runtime_config_t& config)
-{
+{   // 这个感觉更多算是一个优化，避免太多次的因为版本不够而FrameworkCompatRetry
     // Loop through each reference and update the list of newest references before we resolve_framework_reference.
     for (const fx_reference_t& fx_ref : config.get_frameworks())
     {
         const pal::string_t& fx_name = fx_ref.get_fx_name();
-        auto temp_ref = m_effective_fx_references.find(fx_name);
+        auto temp_ref = m_effective_fx_references.find(fx_name); // m_effective_fx_references 是说对于一个framework比如AspNetCore，目前分析过得到的最高要求，实际使用的一定高于等于这个version
         if (temp_ref == m_effective_fx_references.end())
         {
             m_effective_fx_references.insert({ fx_name, fx_ref });
-            m_oldest_fx_references.insert({ fx_name, fx_ref });
+            m_oldest_fx_references.insert({ fx_name, fx_ref }); // 对于一个framework最小的version是哪个，fx_resolver中唯一的使用是放入到fx_definition中，至于fx_definition怎么使用尚未review。而且有一个可能的问题？如果retry的时候改变了引用到的framework就会导致这个oldest可能会过老的样子？
         }
         else
         {
@@ -376,8 +376,8 @@ void fx_resolver_t::update_newest_references(
     }
 }
 
-// Processes one framework's runtime configuration.
-// For the most part this is about resolving framework references.
+// 这里的recursive发生在这样的情况下：比如你的app引用了Microsoft.AspNetCore.App，其引用了Microsoft.NetCore.App，所以会发生recursive。重新总结一下大的思路，就是DFS的去resolve framework，只在第一次遇到一个framework的时候去硬盘上查找最合适的（roll forward发生在这个过程中），后续DFS在遇到这个framework如果要求更高的话，会合并要求放入m_effective_fx_references中去，然后retry整个framework resolve的过程，下次DFS的第一次遇到framewrok的时候m_effective_fx_references包括了后面的要求，就会resolve一个更好的version。知道所有的要求的符合完整解析。
+// Processes one framework's runtime configuration. For the most part this is about resolving framework references.
 // - host_info
 //     Information about the host - mainly used to determine where to search for frameworks.
 // - override_settings
@@ -408,7 +408,7 @@ StatusCode fx_resolver_t::read_framework(
     bool disable_multilevel_lookup,
     const runtime_config_t::settings_t& override_settings,
     const runtime_config_t & config,
-    const fx_reference_t * effective_parent_fx_ref,
+    const fx_reference_t * effective_parent_fx_ref, // parent的roll_to_highest_version有传播性
     fx_definition_vector_t & fx_definitions,
     const pal::char_t* app_display_name)
 {
@@ -450,7 +450,7 @@ StatusCode fx_resolver_t::read_framework(
             }
 
             m_effective_fx_references[fx_name] = new_effective_fx_ref;
-
+            // 这边的逻辑是这样的，遇到了一个没有去硬盘上查找过的framework要求，根据当前所有对于这个framework需求的合集（因为递归的时候，要求在update_newest_references中先统计了一遍，所以这个需求是有可能高于当前的fx_ref的需求的）这个最高需求就是new_effective_fx_ref，resolve_framework_reference负责在硬盘上去resolve这个需求，返回一个找到的framework
             // Resolve the effective framework reference against the existing physical framework folders
             fx_definition_t* fx = resolve_framework_reference(new_effective_fx_ref, m_oldest_fx_references[fx_name].get_fx_version(), host_info.dotnet_root, disable_multilevel_lookup);
             if (fx == nullptr)
@@ -490,7 +490,7 @@ StatusCode fx_resolver_t::read_framework(
                 trace::error(_X("Invalid framework config.json [%s]"), new_config.get_path().c_str());
                 return StatusCode::InvalidConfigFile;
             }
-
+            // 递归的处理这个framework自己对于其他framework的要求
             rc = read_framework(host_info, disable_multilevel_lookup, override_settings, new_config, &new_effective_fx_ref, fx_definitions, app_display_name);
             if (rc)
             {
@@ -509,10 +509,10 @@ StatusCode fx_resolver_t::read_framework(
                 break; // Error case
             }
 
-            if (new_effective_fx_ref != current_effective_fx_ref)
+            if (new_effective_fx_ref != current_effective_fx_ref)   // 之前解析时候使用的最高要求不够了，出现了更高的要求，完全重新解析
             {
                 display_retry_framework_trace(current_effective_fx_ref, fx_ref);
-
+                // 这个case的一个可能性就是说比如AspNet引用了NET7.0，而App自身引用了NET8.0，因为recursive顺序，第一次会解析成7.0，然后retry到8.0。需要完全retry而不是forward之类的原因是不同的version引用的framework可能会发生变化，导致整个recursive的图完全变化。
                 m_effective_fx_references[fx_name] = new_effective_fx_ref;
                 return StatusCode::FrameworkCompatRetry;
             }

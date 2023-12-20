@@ -615,7 +615,7 @@ void CLRConfig::FreeConfigString(_In_z_ LPWSTR str)
 
 //
 // Initialize the internal cache for faster lookup.
-//
+// 只是用来看某个env是否存在，但是不会cache它的值。用的是GetEnvironmentStringsW, 所以在SiteContainer下还有风险。
 // static
 void CLRConfig::Initialize()
 {

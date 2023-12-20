@@ -38,7 +38,7 @@ public:
     bool get_is_framework_dependent() const;
     bool parse_opts(const json_parser_t::value_t& opts);
     void combine_properties(std::unordered_map<pal::string_t, pal::string_t>& combined_properties) const;
-    const fx_reference_vector_t& get_frameworks() const { return m_frameworks; }
+    const fx_reference_vector_t& get_frameworks() const { return m_frameworks; }    // runtimeOptions.framework / frameworks
     const fx_reference_vector_t& get_included_frameworks() const { return m_included_frameworks; }
     void set_fx_version(pal::string_t version);
 

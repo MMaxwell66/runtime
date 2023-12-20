@@ -69,6 +69,15 @@ typedef const UTF8 *LPCUTF8;
 // ==========================================================================================
 
 
+/*
+class SString
+class SBuffer
+   +0x000 m_size           : Uint4B
+   +0x004 m_allocation     : Uint4B
+   +0x008 m_flags          : Uint4B
+   +0x010 m_buffer         : Ptr64 UChar
+   +0x010 m_asStr          : Ptr64 Wchar
+*/
 typedef DPTR(class SString) PTR_SString;
 class EMPTY_BASES_DECL SString : private SBuffer
 {

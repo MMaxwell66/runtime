@@ -430,11 +430,11 @@ namespace
         fx_definition_vector_t fx_definitions;
         auto app = new fx_definition_t();
         fx_definitions.push_back(std::unique_ptr<fx_definition_t>(app));
-        int rc = read_config(*app, app_candidate, runtime_config, override_settings);
+        int rc = read_config(*app, app_candidate, runtime_config, override_settings);   // 先读 dev.json 再读 .json, 读取结果会以 .json 优先的方式 merge
         if (rc != StatusCode::Success)
             return rc;
 
-        runtime_config_t app_config = app->get_runtime_config();
+        runtime_config_t app_config = app->get_runtime_config();    // 这里是一个clone操作，不知道有没有必要，一点点性能优势。
         bool is_framework_dependent = app_config.get_is_framework_dependent();
 
         pal::string_t additional_deps_serialized;
@@ -445,7 +445,7 @@ namespace
             if (fx_version_specified.length() > 0)
             {
                 // This will also set roll forward defaults on the ref
-                app_config.set_fx_version(fx_version_specified);
+                app_config.set_fx_version(fx_version_specified);    // 这里就设置了，后面有没有人会覆盖？
             }
 
             // Determine additional deps

@@ -239,7 +239,7 @@ int hostpolicy_context_t::initialize(const hostpolicy_init_t &hostpolicy_init, c
             probe_paths.tpa.push_back(PATH_SEPARATOR);
         }
 
-        probe_paths.tpa.append(corelib_path);
+        probe_paths.tpa.append(corelib_path); // may duplicate
     }
 
     pal::string_t fx_deps_str;

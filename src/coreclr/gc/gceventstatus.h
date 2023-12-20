@@ -41,6 +41,9 @@
  * if the given level is less than or equal to the current enabled level
  * and if the keyword is present in the enabled keyword bitmask for that
  * provider.
+ *
+ * 好像Set就是单纯的把enabledLevels, enabledKeywords设置一下. 那么如果其他人需要主动去监听这个信息而不是被动的收取.
+ *
  */
 class GCEventStatus
 {

@@ -288,7 +288,7 @@ void Frame::Init()
     CONTRACTL_END;
     // create a table big enough for all the frame types, not in asynchronous mode, and with no lock owner
     s_pFrameVTables = ::new PtrHashMap;
-    s_pFrameVTables->Init(2 * FRAME_TYPES_COUNT, FALSE, &g_lockTrustMeIAmThreadSafe);
+    s_pFrameVTables->Init(2 * FRAME_TYPES_COUNT, FALSE, &g_lockTrustMeIAmThreadSafe); // 本来这个lock也只在debug下使用
 #define FRAME_TYPE_NAME(frameType)                          \
     s_pFrameVTables->InsertValue(frameType::GetMethodFrameVPtr(), \
                                (LPVOID) frameType::GetMethodFrameVPtr());

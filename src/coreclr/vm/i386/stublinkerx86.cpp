@@ -824,7 +824,7 @@ static BYTE gX86CondJump[sizeof(X86CondJump)];
 static BYTE gX86Call[sizeof(X86Call)];
 static BYTE gX86PushImm32[sizeof(X86PushImm32)];
 
-/* static */ void StubLinkerCPU::Init()
+/* static */ void StubLinkerCPU::Init()     // 就是记录了一下这些的可能的指令长度
 {
     CONTRACTL
     {

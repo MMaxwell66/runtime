@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+// 也是KeyValue的，但是对于key, value range有几个洞。感觉是弱化版的SHash?
+
 
 /*++---------------------------------------------------------------------------------------
 
@@ -359,7 +361,7 @@ private:
 
     Compare*        m_pCompare;         // compare object to be used in lookup
     SIZE_T          m_iPrimeIndex;      // current size (index into prime array)
-    PTR_Bucket      m_rgBuckets;        // array of buckets
+    PTR_Bucket      m_rgBuckets;        // array of buckets // m_rgBuckets[0] is the size
 
     // track the number of inserts and deletes
     SIZE_T          m_cbPrevSlotsInUse;

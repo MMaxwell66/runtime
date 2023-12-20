@@ -565,7 +565,7 @@ void FatalErrorHandler(UINT errorCode, LPCWSTR pszMessage)
     EEPOLICY_HANDLE_FATAL_ERROR_WITH_MESSAGE(errorCode, pszMessage);
 }
 
-void EEStartupHelper()
+void EEStartupHelper()  // 发生的一些 non-trial 的步骤: 1. load config (EEConfig, CLRConfig) 2. ExecutableAllocator的mmap 3. GC Init
 {
     CONTRACTL
     {
@@ -607,13 +607,13 @@ void EEStartupHelper()
 
         // SString initialization
         // This needs to be done before config because config uses SString::Empty()
-        SString::Startup();
+        SString::Startup(); // setup s_Empty + GetACP
 
-        IfFailGo(EEConfig::Setup());
+        IfFailGo(EEConfig::Setup());    // g_pConfig->Init(), 固定的初始值, 定义在vars.hpp中
 
 
 #ifdef HOST_WINDOWS
-        InitializeCrashDump();
+        InitializeCrashDump();          // 生成一个commandline string并保存下来
 
 #endif // HOST_WINDOWS
 #ifndef TARGET_UNIX
@@ -624,16 +624,16 @@ void EEStartupHelper()
         // This needs to be done before the EE has started
         InitializeStartupFlags();
 
-        IfFailGo(ExecutableAllocator::StaticInitialize(FatalErrorHandler));
+        IfFailGo(ExecutableAllocator::StaticInitialize(FatalErrorHandler)); // new ExecutableAllocator()->initialize(), reserve 一块 2048GiB
 
-        Thread::StaticInitialize();
+        Thread::StaticInitialize(); // init optional feature special user mode Async Procedure Call
 
-        JITInlineTrackingMap::StaticInitialize();
-        MethodDescBackpatchInfoTracker::StaticInitialize();
-        CodeVersionManager::StaticInitialize();
-        TieredCompilationManager::StaticInitialize();
-        CallCountingManager::StaticInitialize();
-        OnStackReplacementManager::StaticInitialize();
+        JITInlineTrackingMap::StaticInitialize(); // CRST
+        MethodDescBackpatchInfoTracker::StaticInitialize(); // CRST
+        CodeVersionManager::StaticInitialize(); // CRST
+        TieredCompilationManager::StaticInitialize(); // CRST
+        CallCountingManager::StaticInitialize();    // s_callCountingManagers = new CallCountingManagerHash
+        OnStackReplacementManager::StaticInitialize(); // CRST
 
 #ifdef TARGET_UNIX
         ExecutableAllocator::InitPreferredRange();
@@ -644,7 +644,7 @@ void EEStartupHelper()
 
             g_runtimeLoadedBaseAddress = (SIZE_T)pe.GetBase();
             g_runtimeVirtualSize = (SIZE_T)pe.GetVirtualSize();
-            ExecutableAllocator::InitLazyPreferredRange(g_runtimeLoadedBaseAddress, g_runtimeVirtualSize, GetRandomInt(64));
+            ExecutableAllocator::InitLazyPreferredRange(g_runtimeLoadedBaseAddress, g_runtimeVirtualSize, GetRandomInt(64));    // also init g_random here，计算了一段合适的空间来放JIT的代码
         }
 #endif // !TARGET_UNIX
 
@@ -690,9 +690,9 @@ void EEStartupHelper()
         ETWFireEvent(EEStartupStart_V1);
 #endif // FEATURE_EVENT_TRACE
 
-        InitGSCookie();
+        InitGSCookie();     // __security_cookie ^ GetTickCount()
 
-        Frame::Init();
+        Frame::Init();  // init一个哈希表，key-value为对于frame type class的虚函数表
 
 
 
@@ -706,7 +706,7 @@ void EEStartupHelper()
 #endif
 
 #ifdef FEATURE_PGO
-        PgoManager::Initialize();
+        PgoManager::Initialize();   // Read PGO data if enabled
 #endif
 
         STRESS_LOG0(LF_STARTUP, LL_ALWAYS, "===================EEStartup Starting===================");
@@ -724,7 +724,7 @@ void EEStartupHelper()
         // Fire the runtime information ETW event
         ETW::InfoLog::RuntimeInformation(ETW::InfoLog::InfoStructs::Normal);
 
-        if (breakOnEELoad.val(CLRConfig::UNSUPPORTED_BreakOnEELoad) == 1)
+        if (breakOnEELoad.val(CLRConfig::UNSUPPORTED_BreakOnEELoad) == 1)   // DebugBreak on startup，但不知道windbg怎么指定环境变量
         {
 #ifdef _DEBUG
             _ASSERTE(!"Start loading EE!");
@@ -735,7 +735,7 @@ void EEStartupHelper()
 
 #ifdef ENABLE_STARTUP_DELAY
         PREFIX_ASSUME(NULL != g_pConfig);
-        if (g_pConfig->StartupDelayMS())
+        if (g_pConfig->StartupDelayMS())    // 可以拿来延迟让debugger attach
         {
             ClrSleepEx(g_pConfig->StartupDelayMS(), FALSE);
         }
@@ -761,22 +761,22 @@ void EEStartupHelper()
         Interpreter::Initialize();
 #endif // FEATURE_INTERPRETER
 
-        StubManager::InitializeStubManagers();
+        StubManager::InitializeStubManagers();  // Crst
 
         // Set up the cor handle map. This map is used to load assemblies in
         // memory instead of using the normal system load
-        PEImage::Startup();
+        PEImage::Startup(); // init Crst + PtrHashMap
 
         AccessCheckOptions::Startup();
 
-        CoreLibBinder::Startup();
+        CoreLibBinder::Startup();   // Crst
 
         Stub::Init();
         StubLinkerCPU::Init();
-        StubPrecode::StaticInitialize();
-        FixupPrecode::StaticInitialize();
+        StubPrecode::StaticInitialize();    // noop in x64
+        FixupPrecode::StaticInitialize();   // noop in x64
 
-        InitializeGarbageCollector();
+        InitializeGarbageCollector();       // ⚠️ GC here!
 
         if (!GCHandleUtilities::GetGCHandleManager()->Initialize())
         {
@@ -1608,7 +1608,7 @@ void InitializeGarbageCollector()
 
     // Build the special Free Object used by the Generational GC
     _ASSERT(g_pFreeObjectMethodTable == NULL);
-    g_pFreeObjectMethodTable = (MethodTable *) new BYTE[sizeof(MethodTable)];
+    g_pFreeObjectMethodTable = (MethodTable *) new BYTE[sizeof(MethodTable)];   // 为什么不直接静态开好？这样后面访问都要两次deref
     ZeroMemory(g_pFreeObjectMethodTable, sizeof(MethodTable));
 
     // As the flags in the method table indicate there are no pointers

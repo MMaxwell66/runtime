@@ -51,6 +51,7 @@ corehost_init_t::corehost_init_t(
     std::unordered_map<pal::string_t, pal::string_t> combined_properties;
     for (auto& fx : fx_definitions)
     {
+        // NOTE(JJ): here is the prioprity of runtime config properties
         fx->get_runtime_config().combine_properties(combined_properties);
 
         m_fx_names.push_back(fx->get_name());

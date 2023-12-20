@@ -4042,7 +4042,7 @@ void AccessCheckOptions::Startup()
 {
     STANDARD_VM_CONTRACT;
 
-    s_pNormalAccessChecks = new AccessCheckOptions(
+    s_pNormalAccessChecks = new AccessCheckOptions( // all empty
                                     AccessCheckOptions::kNormalAccessibilityChecks,
                                     NULL,
                                     FALSE,

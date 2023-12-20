@@ -40,7 +40,7 @@ bool fx_reference_t::is_compatible_with_higher_version(const fx_ver_t& higher_ve
     // In here it means that either everything but pre-release part is the same, or the difference is OK
     // The roll-forward rules don't affect pre-release roll forward except when
     //  - rollForward is Disable - in which case no roll forward should occur, and the versions must exactly match
-    //  - rollForward is LatestPatch and applyPatches=false - which would normally mean exactly the same as Disable, but
+    //  - rollForward is LatestPatch and applyPatches=false - which would "normally mean exactly the same as Disable", but
     //    for backward compat reasons this is a special case. In this case applyPatches is ignored for pre-release versions.
     //    So even if pre-release are different, the versions are compatible.
     if (version_compatibility_range == version_compatibility_range_t::exact)

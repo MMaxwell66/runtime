@@ -987,7 +987,7 @@ void SystemDomain::Attach()
     m_pSystemDomain->BaseDomain::Init(); // Setup the memory heaps
 
     // Create the one and only app domain
-    AppDomain::Create();
+    AppDomain::Create();    // 因为AppDomain继承BaseDomain，所以这里会有两个BaseDomain
 
     // Each domain gets its own ReJitManager, and ReJitManager has its own static
     // initialization to run
@@ -1127,7 +1127,7 @@ void SystemDomain::Init()
     DWORD size = 0;
 
     // Get the install directory so we can find CoreLib
-    hr = GetInternalSystemDirectory(NULL, &size);
+    hr = GetInternalSystemDirectory(NULL, &size); // NOTE(JJ): the directory which coreclr.dll locate in
     if (hr != HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER))
         ThrowHR(hr);
 
@@ -1143,7 +1143,7 @@ void SystemDomain::Init()
     {
         m_BaseLibrary.Append(DIRECTORY_SEPARATOR_CHAR_W);
     }
-    m_BaseLibrary.Append(g_pwBaseLibrary);
+    m_BaseLibrary.Append(g_pwBaseLibrary); // NOTE(JJ): System.Private.CoreLib.dll
     m_BaseLibrary.Normalize();
 
     LoadBaseSystemClasses();

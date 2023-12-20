@@ -322,7 +322,7 @@ struct MethodTable::MultipurposeSlotOffset
     // where the first fixed slot is not used, but the second one is. The first fixed
     // slot has to be assigned instead of the second one in this case. This assumes that
     // there are exactly two fixed slots.
-    enum { index = (((mask & 3) == 2) && (raw == 1)) ? 0 : raw };
+    enum { index = (((mask & 3) == 2) && (raw == 1)) ? 0 : raw }; // NOTE(JJ): see MethodTable::m_pInterfaceMap
 
     // Offset of slot
     enum { slotOffset = (index == 0) ? offsetof(MethodTable, m_pMultipurposeSlot1) :

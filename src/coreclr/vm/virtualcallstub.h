@@ -1450,6 +1450,8 @@ grown at any given time.  Since the hash tables are accessed infrequently, the l
 controls growth is quite high (90%).  Since we use hashing to pick the bucket, and we use hashing to
 lookup inside the bucket, it is important that the hashing function used here is orthogonal to the ones
 used in the buckets themselves (see FastTable::FormHash).
+见 ::buckets 上面的注释，array前几个元素的用途
+看上去就是一个array-based的hash table.
 */
 class BucketTable
 {

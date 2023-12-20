@@ -29,7 +29,7 @@ private:
     pal::string_t m_dir;
     pal::string_t m_requested_version;
     pal::string_t m_found_version;
-    runtime_config_t m_runtime_config;
+    runtime_config_t m_runtime_config;  // 这个是从 .runtimeconfig.json / .runtimeconfig.dev.json 中读取的
 };
 
 typedef std::vector<std::unique_ptr<fx_definition_t>> fx_definition_vector_t;

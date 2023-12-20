@@ -126,7 +126,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
 #if defined(HOST_OSX) && defined(HOST_ARM64)
     return false;
 #else
-    return g_isWXorXEnabled;
+    return g_isWXorXEnabled;    // normally true
 #endif
 }
 
@@ -164,7 +164,7 @@ void ExecutableAllocator::InitLazyPreferredRange(size_t base, size_t size, int r
     // If we are using USE_LAZY_PREFERRED_RANGE then we try to allocate memory close
     // to coreclr.dll.  This avoids having to create jump stubs for calls to
     // helpers and R2R images loaded close to coreclr.dll.
-    //
+    // 这段逻辑在runtime一开始就有了，所以不好从PR判断，但是我感觉是说目的是让preferred range内的code和coreclr的距离差保持在 -reach, reach 之间，从而可以用短指令实现jmp?
     SIZE_T reach = 0x7FFF0000u;
 
     // We will choose the preferred code region based on the address of coreclr.dll. The JIT helpers
@@ -175,7 +175,7 @@ void ExecutableAllocator::InitLazyPreferredRange(size_t base, size_t size, int r
     BYTE * pStart;
 
     if (base > UINT32_MAX)
-    {
+    {   // 这个 g_codeMinAddr 应该就是 g_preferredRangeMin 只是注释没有修改。注释的后半句reach应该还是为了短指令jmp的考虑，而不是怕碰到了。
         // Try to occupy the space as far as possible to minimize collisions with other ASLR assigned
         // addresses. Do not start at g_codeMinAddr exactly so that we can also reach common native images
         // that can be placed at higher addresses than coreclr.dll.
@@ -455,7 +455,7 @@ bool ExecutableAllocator::RemoveRWBlock(void* pRW, void** pUnmapAddress, size_t*
 
     return false;
 }
-
+// 只是在double mapping的mmap中分配一个offset并没有真实的分配
 bool ExecutableAllocator::AllocateOffset(size_t* pOffset, size_t size)
 {
     LIMITED_METHOD_CONTRACT;
@@ -573,7 +573,7 @@ void ExecutableAllocator::Release(void* pRX)
 // Find a free block with the size == the requested size.
 // Returns NULL if no such block exists.
 ExecutableAllocator::BlockRX* ExecutableAllocator::FindBestFreeBlock(size_t size)
-{
+{   // 一个单链表
     LIMITED_METHOD_CONTRACT;
 
     BlockRX* pPrevBlock = NULL;
@@ -625,9 +625,9 @@ ExecutableAllocator::BlockRX* ExecutableAllocator::AllocateBlock(size_t size, bo
         }
 
         block = new (nothrow) BlockRX();
-        if (block == NULL)
+        if (block == NULL)  // 不需要return没用到的offset吗？感觉是个bug
         {
-            return NULL;
+            return NULL;    // 还是说leak的问题，草草的想法是，如果在runtime allocate大块memory导致ClrMalloc失败，就会产生offset leak。如果W^X是限定在mmap内的话，我们就能把一些executable leak到W^X以外去。
         }
 
         block->offset = offset;
@@ -704,6 +704,7 @@ void* ExecutableAllocator::ReserveWithinRange(size_t size, const void* loAddress
     }
 }
 
+// 两步，第一在static init的mmap中分配一块offset，把分配到的offset映射到一个reserve的memory block上面去。
 // Reserve executable memory. On Windows it tries to use the allocation hints to
 // allocate memory close to the previously allocated executable memory and loaded
 // executable files.

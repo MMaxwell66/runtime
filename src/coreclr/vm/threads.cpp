@@ -1108,7 +1108,7 @@ PCODE AdjustWriteBarrierIP(PCODE controlPc)
 #ifdef TARGET_X86
 extern "C" void *JIT_WriteBarrierEAX_Loc;
 #elif TARGET_AMD64
-extern "C" void *JIT_WriteBarrier_Loc;
+extern "C" void *JIT_WriteBarrier_Loc;  // 指向一份executableallocator的 JIT_WriteBarrier 的拷贝
 #else
 extern "C" void *JIT_WriteBarrier_Loc;
 void *JIT_WriteBarrier_Loc = 0;
@@ -1125,7 +1125,7 @@ void *JIT_WriteBarrier_Table_Loc = 0;
 #pragma optimize("", off)
 static void SetIlsIndex(DWORD tlsIndex)
 {
-    g_TlsIndex = tlsIndex;
+    g_TlsIndex = tlsIndex;  // 高位保存了offset到threads的偏移量
 }
 #pragma optimize("", on)
 #endif
@@ -1242,7 +1242,7 @@ void InitThreadManager()
         COMPlusThrowWin32();
 #endif
 
-    IfFailThrow(Thread::CLRSetThreadStackGuarantee(Thread::STSGuarantee_Force));
+    IfFailThrow(Thread::CLRSetThreadStackGuarantee(Thread::STSGuarantee_Force));    // 这个guard不是overflow的而是exception的时候，给exception handle使用的空间大小。WIN32 API SetThreadStackGuarantee
 
     ThreadStore::InitThreadStore();
 

@@ -297,7 +297,7 @@ int coreclr_initialize(
 
     ReleaseHolder<ICLRRuntimeHost4> host;
 
-    hr = CorHost2::CreateObject(IID_ICLRRuntimeHost4, (void**)&host);
+    hr = CorHost2::CreateObject(IID_ICLRRuntimeHost4, (void**)&host); // 基本上就是new CorHost2()
     IfFailRet(hr);
 
     ConstWStringHolder appDomainFriendlyNameW = StringToUnicode(appDomainFriendlyName);
@@ -312,12 +312,12 @@ int coreclr_initialize(
     Configuration::InitializeConfigurationKnobs(propertyCount, propertyKeysW, propertyValuesW);
 
     STARTUP_FLAGS startupFlags;
-    InitializeStartupFlags(&startupFlags);
+    InitializeStartupFlags(&startupFlags); // env then properties, STARTUP_LOADER_OPTIMIZATION_SINGLE_DOMAIN | STARTUP_SINGLE_APPDOMAIN | gc_value
 
     hr = host->SetStartupFlags(startupFlags);
     IfFailRet(hr);
 
-    hr = host->Start();
+    hr = host->Start(); // one time wrapper around `EnsureEEStarted`
     IfFailRet(hr);
 
     hr = host->CreateAppDomainWithManager(

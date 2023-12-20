@@ -189,6 +189,20 @@ If you change any of those algorithm, please verify it by this program:
 #define COMPUTE_CLUMP_ADDENDS(gen, msk)     MAKE_CLUMP_MASK_ADDENDS(COMPUTE_CLUMP_MASK(gen, msk))
 #define COMPUTE_AGED_CLUMPS(gen, msk)       APPLY_CLUMP_ADDENDS(gen, COMPUTE_CLUMP_ADDENDS(gen, msk))
 
+/*
+BuildAgeMask(a, b) => a < b <= GEN_MAX_AGE => a repeat 4 times + 1
+BuildAgeMask(a, b) => a = b => 0x3E repeat 4 times + 1 <=> BuildAgeMask(0x3E, 0x3F)
+we can view BuildAgeMask as BuildAgeMask(a, 0x3F) where 0 <= a <= 0x3E
+
+-BuildAgeMask(gen, 2) => (~gen)(7bit) repeat 4 times
+COMPUTE_CLUMP_MASK 只看 0x7F7F7F7F 每个byte的7bits
+(gen0 (6bit) + ~gen (7bit)) = gen0 + -gen-1 (7bits signed, 6 bits absolute运算)
+因为只有7bit，不会溢出影响到第八bit，或者说是7 bit signed的8 bit扩展符号位计算结果。然后7 bit的符号看bit 7就行，也就是0x40
+所以 （gen - msk) & 0x40 != 0 <=> gen0 + -gen-1 < 0 <=> gen0 < gen+1 <=> gen0 <= gen
+
+之后几个就比较容易了，COMPUTE_CLUMP_MASK只设置了0x40这个bit 7，shift到bit 1之后就等于说加一或者加零了。也不会有溢出就之前加好了。
+当然有些边界细节(0x3E, 0x3F)没有仔细看过，不过估计就是一些细节问题了。核心思想就是用7 bit signed, 然后用8 bit的扩展符号位方式来防止溢出。
+*/
 /*--------------------------------------------------------------------------*/
 
 
@@ -313,7 +327,7 @@ __inline BOOL IsBlockIncluded(TableSegment *pSegment, uint32_t uBlock, const BOO
     // fetch the adjusted type for this block
     uint32_t uType = (uint32_t)(((int)(signed char)pSegment->rgBlockType[uBlock]) + 1);
 
-    // hope the adjusted type was valid
+    // hope the adjusted type was valid // 为啥要adjust?
     _ASSERTE(uType <= HANDLE_MAX_INTERNAL_TYPES);
 
     // return the inclusion value for the block's type
@@ -1349,7 +1363,7 @@ void xxxTableScanQueuedBlocksAsync(PTR_HandleTable pTable, PTR_TableSegment pSeg
  * QuickSegmentIterator
  *
  * Returns the next segment to be scanned in a scanning loop.
- *
+ * 这个就是return linked list中的下一个
  */
 PTR_TableSegment CALLBACK QuickSegmentIterator(PTR_HandleTable pTable, PTR_TableSegment pPrevSegment, CrstHolderWithState *)
 {
@@ -1416,7 +1430,7 @@ PTR_TableSegment CALLBACK StandardSegmentIterator(PTR_HandleTable pTable, PTR_Ta
  *
  * This iterator performs full maintenance on the segments,
  * including freeing those it notices are empty along the way.
- *
+ * 按照单链表扫描，但是会release page, free segment
  */
 PTR_TableSegment CALLBACK FullSegmentIterator(PTR_HandleTable pTable, PTR_TableSegment pPrevSegment, CrstHolderWithState *)
 {
@@ -1672,7 +1686,7 @@ void SegmentScanByTypeMap(PTR_TableSegment pSegment, const BOOL *rgTypeInclusion
  * TableScanHandles
  *
  * Implements the core handle scanning loop for a table.
- *
+ * 如果blocks连续，可以多个block同时处理
  */
 void CALLBACK TableScanHandles(PTR_HandleTable pTable,
                                const uint32_t *puType,
@@ -1692,7 +1706,7 @@ void CALLBACK TableScanHandles(PTR_HandleTable pTable,
 
     // we only need to scan types if we have a type array and a callback to call
     if (!pfnBlockHandler || !puType)
-        uTypeCount = 0;
+        uTypeCount = 0; // 不直接return是为了让后面的一些free工作有可能执行吧
 
     // if we will be scanning more than one type then initialize the inclusion map
     if (uTypeCount > 1)

@@ -649,7 +649,7 @@ CleanupAndFail:
         delete[] pBuckets;
 
     if (g_gcGlobalHandleStore != NULL)
-        delete g_gcGlobalHandleStore;
+        delete g_gcGlobalHandleStore;       // BUG: 这里HandleTableBucketHolder会在之后deconstruct, 但是里面还是会访问g_gcGlobalHandleStore
 
     return false;
 }

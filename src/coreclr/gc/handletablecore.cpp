@@ -127,6 +127,7 @@ void QuickSort(uintptr_t *pData, int left, int right, PFNCOMPARE pfnCompare)
  *  =0 - handles are equivalent for free order purposes
  *  >0 - handle Q should be freed before handle P
  *
+ * bSequence是alloca的顺序，而相对顺序又是和commit相关。所以这个order的目的是什么？
  */
 int CompareHandlesByFreeOrder(uintptr_t p, uintptr_t q)
 {
@@ -252,7 +253,7 @@ BOOL TableCanFreeSegmentNow(HandleTable *pTable, TableSegment *pSegment)
     }
 
     // we can free our segment if it isn't being scanned asynchronously right now
-    return (pSegment != pSegmentAsync);
+    return (pSegment != pSegmentAsync); // 没有加锁哦，要看caller的使用情况
 }
 
 #endif // !DACCESS_COMPILE
@@ -626,7 +627,7 @@ BOOL TableContainHandle(HandleTable *pTable, OBJECTHANDLE handle)
     TableSegment *pSegment = (TableSegment *)HandleFetchSegmentPointer(handle);
 
     CrstHolder ch(&pTable->Lock);
-    TableSegment *pWorkerSegment = pTable->pSegmentList;
+    TableSegment *pWorkerSegment = pTable->pSegmentList;    // 不知道能不能用pSegment->pHandleTable == pTable，主要看锁的范围
     while (pWorkerSegment)
     {
         if (pWorkerSegment == pSegment)
@@ -656,7 +657,7 @@ void SegmentRemoveFreeBlocks(TableSegment *pSegment, uint32_t uType, BOOL *pfSca
     */
 
     // fetch the tail block for the specified chain
-    uint32_t uPrev = pSegment->rgTail[uType];
+    uint32_t uPrev = pSegment->rgTail[uType];   // Q:最老的吗？A:最新分配的blob会设为tail
 
     // if it's a terminator then there are no blocks in the chain
     if (uPrev == BLOCK_INVALID)
@@ -1004,7 +1005,7 @@ uint32_t SegmentInsertBlockFromFreeList(TableSegment *pSegment, uint32_t uType, 
  *
  * Sorts the block chains for optimal scanning order.
  * Sorts the free list to combat fragmentation.
- *
+ * 让各个链表递增，好处有哪些，对于其他type的作用不太好说，但是对于free的话，放在下面可以有机会un-commit block吗？不过也会去处理一下被block的free block也会有一些好处。
  */
 void SegmentResortChains(TableSegment *pSegment)
 {
@@ -1352,7 +1353,7 @@ uint32_t BlockAllocHandlesInMask(TableSegment *pSegment, uint32_t uBlock,
             do
             {
                 // get the index of the next handle
-                uint32_t uIndex = c_rgLowBitIndex[dwLowByte];
+                uint32_t uIndex = c_rgLowBitIndex[dwLowByte];       // 有点没必要吧，感觉是有高效的assembly指令可以直接得到的，不过要考虑到不同CPU就是了。不知道runtime有没有现有的接口
 
                 // compute the mask for the handle we chose
                 dwAlloc |= (1 << uIndex);
@@ -1593,7 +1594,7 @@ uint32_t SegmentAllocHandlesFromTypeChain(TableSegment *pSegment, uint32_t uType
             uBlock = pSegment->rgAllocation[uBlock];
 
             // are we out of blocks?
-            if (uBlock == uLast)
+            if (uBlock == uLast)    // 尽管这是一个不可能的case，但是应该check BLOCK_INVALID更对吧。
             {
                 // free count is corrupt
                 _ASSERTE(FALSE);
@@ -1646,7 +1647,7 @@ uint32_t SegmentAllocHandlesFromFreeList(TableSegment *pSegment, uint32_t uType,
             uAlloc = HANDLE_HANDLES_PER_BLOCK;
 
         // try to get a block from the free list
-        uint32_t uBlock = SegmentInsertBlockFromFreeList(pSegment, uType, (uRemain == uCount));
+        uint32_t uBlock = SegmentInsertBlockFromFreeList(pSegment, uType, (uRemain == uCount)); // 这个 == 应该只是用于优化而已吧
 
         // if there are no free blocks left then we are done
         if (uBlock == BLOCK_INVALID)
@@ -1984,7 +1985,7 @@ uint32_t BlockFreeHandles(TableSegment *pSegment, uint32_t uBlock, OBJECTHANDLE 
     } while (uRemain);
 
     // are all masks we touched free?
-    if (fAllMasksWeTouchedAreFree)
+    if (fAllMasksWeTouchedAreFree)  // 而且这里没有考虑其他没有触碰的mask，所以只是scan?
     {
         // is the block unlocked?
         // NOTE: This check is incorrect and defeats the intended purpose of scavenging. If the

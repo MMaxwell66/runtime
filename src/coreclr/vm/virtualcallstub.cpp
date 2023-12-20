@@ -477,7 +477,7 @@ void VirtualCallStubManager::ResetCache()
     }
 
 }
-
+// 初始化两个LoaderHeap+四个CodeFragmentHeap
 void VirtualCallStubManager::Init(BaseDomain *pDomain, LoaderAllocator *pLoaderAllocator)
 {
     CONTRACTL {
@@ -551,7 +551,7 @@ void VirtualCallStubManager::Init(BaseDomain *pDomain, LoaderAllocator *pLoaderA
 
     BYTE * initReservedMem = NULL;
 
-    if (!m_loaderAllocator->IsCollectible())
+    if (!m_loaderAllocator->IsCollectible())    // 如果是不collectible的话，就分配上面所要求的reserve的内存，不然的话，使用loaderAlloactor的VSDHeapInitialBlock，这个在loaderAllocator::Init中分配。
     {
         DWORD dwTotalReserveMemSizeCalc  = indcell_heap_reserve_size     +
                                            cache_entry_heap_reserve_size;

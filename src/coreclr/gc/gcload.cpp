@@ -108,7 +108,7 @@ GC_Initialize(
 #endif // WRITE_BARRIER_CHECK
 
         g_gc_heap_type = GC_HEAP_SVR;
-        heap = SVR::CreateGCHeap();
+        heap = SVR::CreateGCHeap();     // 只是new了一个,这个其实什么都没做.
         SVR::PopulateDacVars(gcDacVars);
     }
     else

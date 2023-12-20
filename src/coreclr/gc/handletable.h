@@ -7,6 +7,9 @@
  * Implements generic support for external handles into a GC heap.
  *
 
+有一些general的想法：
+1. handle看上去是不能移动的，考虑到generation是根据clump(16 handles)优化的， 我们应该把生命周期相近的clump一起分配。handle是可以分配给null的（不知道c#里面可不可以这么做，可以的话可以提前申请一些lifetime相近的handle）
+
  *
  */
 
@@ -65,6 +68,7 @@ uint32_t        HndGetHandleTableIndex(HHANDLETABLE hTable);
 #ifndef DACCESS_COMPILE
 /*
  * individual handle allocation and deallocation
+ * 这个handle其实就是指向TableSegment.rgValue中的一个指针，object会被放到这个指针指向的位置，即放到TableSegment.rgValue中去。
  */
 OBJECTHANDLE    HndCreateHandle(HHANDLETABLE hTable, uint32_t uType, OBJECTREF object, uintptr_t lExtraInfo = 0);
 void            HndDestroyHandle(HHANDLETABLE hTable, uint32_t uType, OBJECTHANDLE handle);
@@ -88,6 +92,7 @@ HHANDLETABLE    HndGetHandleTable(OBJECTHANDLE handle);
 
 /*
  * write barrier
+ * 设置segment中的clump generation，也就是说4个handle一组，记录其中最小的generation number，用来帮助GC判断需不需要扫描这个clump。
  */
 void            HndWriteBarrierWorker(OBJECTHANDLE handle, _UNCHECKED_OBJECTREF value);
 void            HndWriteBarrier(OBJECTHANDLE handle, OBJECTREF value);

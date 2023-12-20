@@ -18,6 +18,34 @@
 //#define LOG_EXECUTABLE_ALLOCATOR_STATISTICS
 
 // This class is responsible for allocation of all the executable memory in the runtime.
+/*
+class ExecutableAllocator
+   =00007ff8`c58d4ea8 g_instance       : (null) 
+   =00007ff8`c58d4ec8 g_fatalErrorHandler : (null) 
+   =00007ff8`c58d4ed0 g_lazyPreferredRangeStart : (null) 
+   =00007ff8`c58d4ed8 g_lazyPreferredRangeHint : (null) 
+   =00007ff8`c58d4eb0 g_preferredRangeMin : (null) 
+   =00007ff8`c58d4eb8 g_preferredRangeMax : (null) 
+   =00007ff8`c58d4ec0 g_isWXorXEnabled : Bool
+   +0x000 m_pFirstBlockRX  : Ptr64 ExecutableAllocator::BlockRX
+   +0x008 m_pFirstFreeBlockRX : Ptr64 ExecutableAllocator::BlockRX
+   +0x010 m_pFirstBlockRW  : Ptr64 ExecutableAllocator::BlockRW
+   +0x018 m_doubleMemoryMapperHandle : Ptr64 Void
+   +0x020 m_maxExecutableCodeSize : Uint8B
+   +0x028 m_freeOffset     : Uint8B
+   +0x030 m_cachedMapping  : [3] Ptr64 ExecutableAllocator::BlockRW
+   +0x048 m_CriticalSection : Ptr64 Void
+*/
+// 这里面涉及到的memory:
+//  1. 2048GiB FileMapping （看上去是我之前理解不够深的mmap相关的，不占用虚拟空间）
+//  2. 将FileMapping中的一块块映射到进程虚拟空间中。 MapViewOfFile
+//  3. new BlockRX, BlockRW 来记录FileMapping的分块信息。这些之间是通过单链表链接。
+//
+//  BlockRW是用来把BlockRX一部分（当然可以是整个）映射到虚拟空间的一个writable的位置。
+//  ⭐现在逻辑就有点清晰了，通过使用mmap，使得虚拟空间上两块区域对应的物理内存相同，其中一个R+X，另一个W，保证虚拟空间的内存保护，RX对应的物理内存通过RW的虚拟空间进行修改
+//  double mapping名字的含义也很清楚了，就是一块物理内存同时映射到两个虚拟地址上。
+//
+//  插曲：在windbg的memory修改RX的好像会破坏这个关系，而修改RW则不会。是不是因为RX是readonly，windbg要修改就重新映射了一块？
 class ExecutableAllocator
 {
 public:
@@ -39,7 +67,7 @@ private:
         void* baseRX;
         // Size of the block
         size_t size;
-        // Offset of the block in the shared memory
+        // Offset of the block in the shared memory (mmap)
         size_t offset;
     };
 

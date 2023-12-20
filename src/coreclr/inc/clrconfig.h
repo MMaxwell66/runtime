@@ -17,6 +17,7 @@
 #ifndef __CLRConfig_h__
 #define __CLRConfig_h__
 
+// 这个的都是从ENV中拿的
 class CLRConfig
 {
 public:

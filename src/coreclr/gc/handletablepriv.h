@@ -34,15 +34,22 @@
  * Table Segment Header
  *
  * Defines the layout for a segment's header data.
+ * 每个Segment, 60K的handle空间，7680个handle
+ * 每个block 64个handle, 512B，共120个block
+ *   每个block只能有一种type。user data也会有一个block，通过rgUserData关联。
+ * rgAllocation作为next维护了多了链表，有free的单链表，有type的循环链表。
+ * GUESS: 我们有assertion: bEmptyLine <= bCommitLine
  */
 struct _TableSegmentHeader
 {
     /*
-     * Write Barrier Generation Numbers
+     * Write Barrier Generation Numbers: (Init 0xFF)
      *
      * Each slot holds four bytes.  Each byte corresponds to a clump of handles.
      * The value of the byte corresponds to the lowest possible generation that a
      * handle in that clump could point into.
+     *
+     * 每个clump 16个handle，每个block就是4个clump
      *
      * WARNING: Although this array is logically organized as a uint8_t[], it is sometimes
      *  accessed as uint32_t[] when processing bytes in parallel.  Code which treats the
@@ -51,28 +58,29 @@ struct _TableSegmentHeader
     uint8_t rgGeneration[HANDLE_BLOCKS_PER_SEGMENT * sizeof(uint32_t) / sizeof(uint8_t)];
 
     /*
-     * Block Allocation Chains
+     * Block Allocation Chains (Init: 0->1->2->...->BLOCK_INVALID)
      *
      * Each slot indexes the next block in an allocation chain.
+     * 这个其实是多个单链表混在一起，每个type+free list都有一个单链表。其中type的列表是循环列表，free list的是单向列表。感觉叫rgNext更好。
      */
     uint8_t rgAllocation[HANDLE_BLOCKS_PER_SEGMENT];
 
     /*
-     * Block Free Masks
+     * Block Free Masks (Init: 0xFF)
      *
-     * Masks - 1 bit for every handle in the segment.
+     * Masks - 1 bit for every handle in the segment. 每个handle一个bit
      */
     uint32_t rgFreeMask[HANDLE_MASKS_PER_SEGMENT];
 
     /*
-     * Block Handle Types
+     * Block Handle Types (Init: TYPE_INVALID)
      *
      * Each slot holds the handle type of the associated block.
      */
     uint8_t rgBlockType[HANDLE_BLOCKS_PER_SEGMENT];
 
     /*
-     * Block User Data Map
+     * Block User Data Map (Init: BLOCK_INVALID)
      *
      * Each slot holds the index of a user data block (if any) for the associated block.
      */
@@ -87,21 +95,21 @@ struct _TableSegmentHeader
     uint8_t rgLocks[HANDLE_BLOCKS_PER_SEGMENT];
 
     /*
-     * Allocation Chain Tails
+     * Allocation Chain Tails (Init: BLOCK_INVALID)
      *
-     * Each slot holds the tail block index for an allocation chain.
+     * Each slot holds the tail block index for an allocation chain.    最新的block会设为tail，即block会加到tail而不是head
      */
     uint8_t rgTail[HANDLE_MAX_INTERNAL_TYPES];
 
     /*
-     * Allocation Chain Hints
+     * Allocation Chain Hints (Init: BLOCK_INVALID)
      *
-     * Each slot holds a hint block index for an allocation chain.
+     * Each slot holds a hint block index for an allocation chain.  最近一次分配这种type的block会设为hint
      */
     uint8_t rgHint[HANDLE_MAX_INTERNAL_TYPES];
 
     /*
-     * Free Count
+     * Free Count (Init: 0)
      *
      * Each slot holds the number of free handles in an allocation chain.
      */
@@ -110,7 +118,7 @@ struct _TableSegmentHeader
     /*
      * Next Segment
      *
-     * Points to the next segment in the chain (if we ran out of space in this one).
+     * Points to the next segment in the chain (if we ran out of space in this one).    这个单链表是根据TableSegment本身的地址递增排序的。But why?
      */
 #ifdef DACCESS_COMPILE
     TADDR pNextSegment;
@@ -143,13 +151,14 @@ struct _TableSegmentHeader
      * Empty Line
      *
      * Index of the first KNOWN block of the last group of unused blocks in the segment.
+     * GUESS: 最后一整块empty的blocks的第一个block的index
      */
     uint8_t bEmptyLine;
 
     /*
-     * Commit Line
+     * Commit Line (Init: 0)
      *
-     * Index of the first uncommitted block in the segment.
+     * Index of the first _uncommitted_ *block* in the segment. 存的都是OS_PAGE_SIZE/HANDLE_BYTES_PER_BLOCK的倍数。
      */
     uint8_t bCommitLine;
 
@@ -163,7 +172,7 @@ struct _TableSegmentHeader
     /*
      * Sequence
      *
-     * Indicates the segment sequence number.
+     * Indicates the segment sequence number.   这个是根据SegmentAlloc的分配顺序来的。
      */
     uint8_t bSequence;
 };
@@ -184,7 +193,7 @@ struct TableSegment : public _TableSegmentHeader
     /*
      * Filler
      */
-    uint8_t rgUnused[HANDLE_HEADER_SIZE - sizeof(_TableSegmentHeader)];
+    uint8_t rgUnused[HANDLE_HEADER_SIZE - sizeof(_TableSegmentHeader)]; // 感觉浪费的还是不少，有很多逻辑其实可以接收这个被使用吧。
 
     /*
      * Handles
@@ -208,11 +217,12 @@ typedef SPTR(struct TableSegment) PTR_TableSegment;
  * Handle Type Cache
  *
  * Defines the layout of a per-type handle cache.
+ * 可不可以考虑用循环queue的方式来做？不过reblance本身也要负责排序，所以可能算不太多吧。
  */
 struct HandleTypeCache
 {
     /*
-     * reserve bank
+     * reserve bank # TableAllocSingleHandleFromCache会尝试从这里取
      */
     OBJECTHANDLE rgReserveBank[HANDLES_PER_CACHE_BANK];
 
@@ -229,6 +239,7 @@ struct HandleTypeCache
 
     /*
      * free bank
+     * GUESS: 这块区域是用来暂存回收的handle的
      */
     OBJECTHANDLE rgFreeBank[HANDLES_PER_CACHE_BANK];
 
@@ -375,7 +386,7 @@ struct HandleTable
      *
      * N.B. this is at offset 0 due to frequent access by cache free codepath
      */
-    uint32_t rgTypeFlags[HANDLE_MAX_INTERNAL_TYPES];
+    uint32_t rgTypeFlags[HANDLE_MAX_INTERNAL_TYPES];    // 这里是不是只可能是HNDF_NORMAL or HNDF_EXTRAINFO, 每个type只要一个bit就够了？
 
     /*
      * head of segment list for this table
@@ -409,7 +420,7 @@ struct HandleTable
     uint32_t uTableIndex;
 
     /*
-     * one-level per-type 'quick' handle cache
+     * one-level per-type 'quick' handle cache # 每种type存一个回收的handle
      */
     OBJECTHANDLE rgQuickCache[HANDLE_MAX_INTERNAL_TYPES];   // interlocked ops used here
 
@@ -487,7 +498,7 @@ int CompareHandlesByFreeOrder(uintptr_t p, uintptr_t q);
  * TypeHasUserData
  *
  * Determines whether a given handle type has user data.
- *
+ * 初始化的时候传进来的，也就是说决定了由HandleTable决定某个type能不能有user data
  */
 __inline BOOL TypeHasUserData(HandleTable *pTable, uint32_t uType)
 {

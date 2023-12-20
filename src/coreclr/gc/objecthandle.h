@@ -34,8 +34,8 @@ extern HandleTableMap g_HandleTableMap;
 
 struct HandleTableBucket
 {
-    PTR_HHANDLETABLE pTable;
-    uint32_t         HandleTableIndex;
+    PTR_HHANDLETABLE pTable;        // 完善ing, `= new HHANDLETABLE[n_slots=getNumberOfSlots()];` each one: `HndCreateHandleTable(s_rgTypeFlags, ARRAY_SIZE(s_rgTypeFlags))`
+    uint32_t         HandleTableIndex;  // 该struct在g_HandleTableMap.pBuckets中的index
 
     bool Contains(OBJECTHANDLE handle);
 };

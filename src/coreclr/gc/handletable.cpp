@@ -302,7 +302,7 @@ OBJECTHANDLE HndCreateHandle(HHANDLETABLE hTable, uint32_t uType, OBJECTREF obje
     {
         // initialize the user data BEFORE assigning the referent
         // this ensures proper behavior if we are currently scanning
-        HandleQuickSetUserData(handle, lExtraInfo);
+        HandleQuickSetUserData(handle, lExtraInfo); // 这里就应该了segment是64k对齐的这个assertion
     }
 
 #if defined(ENABLE_PERF_COUNTERS) || defined(FEATURE_EVENT_TRACE)
@@ -571,14 +571,14 @@ void HndWriteBarrierWorker(OBJECTHANDLE handle, _UNCHECKED_OBJECTREF value)
     // (utilizing a conditional register move to determine whether the write is an update or simply writes
     // back what was read). This is a legal transformation for non-volatile accesses but obviously leads to a
     // race condition where we can lose an update (see the comment below for the race condition).
-    volatile uint8_t * pClumpAge = barrier + offset;
+    volatile uint8_t * pClumpAge = barrier + offset;    // 好像GC就只有三代，需要8bits吗？
 
     // if this age is smaller than age of the clump, update the clump age
     if (*pClumpAge != 0) // Perf optimization: if clumpAge is 0, nothing more to do
     {
         // find out generation
         int generation = g_theGCHeap->WhichGeneration(value);
-        uint32_t uType = HandleFetchType(handle);
+        uint32_t uType = HandleFetchType(handle);   // 说实话，这里有些code重复，不知道靠inline能不能优化掉。
 
 #ifdef FEATURE_ASYNC_PINNED_HANDLES
         //OverlappedData need special treatment: because all user data pointed by it needs to be reported by this handle,
@@ -603,7 +603,7 @@ void HndWriteBarrierWorker(OBJECTHANDLE handle, _UNCHECKED_OBJECTREF value)
             // youngest handle in the clump, thus GC may skip the clump). To fix this
             // we just set the clump age to 0, which means that whoever wins the race
             // results are the same, as GC will always look at the clump
-            *pClumpAge = (uint8_t)0;
+            *pClumpAge = (uint8_t)0;    // 这个是初始成0xFF，也就是说要不是0要不是0xFF（当然我有很多代码没看）甚至可以优化到1bit?
         }
     }
 }

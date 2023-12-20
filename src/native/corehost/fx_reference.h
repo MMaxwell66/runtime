@@ -10,7 +10,7 @@
 #include "roll_forward_option.h"
 #include "version_compatibility_range.h"
 
-class fx_reference_t
+class fx_reference_t    // 主要是一个 name + version + version roll forward 逻辑
 {
 public:
     fx_reference_t()
@@ -72,7 +72,7 @@ public:
             break;
         case roll_forward_option::LatestPatch:
             version_compatibility_range = version_compatibility_range_t::patch;
-            roll_to_highest_version = false;
+            roll_to_highest_version = false;    // 为什么这个不是 true? 因为这个是否roll是根据prerelease有区别的。
             break;
         case roll_forward_option::Minor:
             version_compatibility_range = version_compatibility_range_t::minor;
@@ -115,6 +115,7 @@ public:
     }
 
     // Is the current version compatible with the specified equal or higher version.
+
     bool is_compatible_with_higher_version(const fx_ver_t& higher_version) const;
 
     // Merge roll forward settings for two framework references
