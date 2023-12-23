@@ -210,7 +210,7 @@ void deps_resolver_t::setup_probe_config(
     const std::vector<pal::string_t>& shared_stores,
     const std::vector<pal::string_t>& additional_probe_paths)
 {
-    if (pal::directory_exists(m_core_servicing))
+    if (pal::directory_exists(m_core_servicing))    // {$env:Program Files}/coreservicing
     {
         pal::string_t ext_ni = m_core_servicing;
         append_path(&ext_ni, get_current_arch_name());
@@ -425,6 +425,7 @@ bool deps_resolver_t::resolve_tpa_list(
         }
 
         // Ignore placeholders
+        // 这个的目的是什么？什么时候会用到？
         if (ends_with(entry.asset.relative_path, _X("/_._"), false))
         {
             return true;
@@ -781,7 +782,7 @@ bool deps_resolver_t::resolve_probe_dirs(
             breadcrumb->insert(entry.library_name);
         }
 
-        if (items.count(entry.asset.name))
+        if (items.count(entry.asset.name))  // resource/native会de-duplication? 不是选取更高version嘛？
         {
             return true;
         }
@@ -894,6 +895,7 @@ bool deps_resolver_t::resolve_probe_dirs(
 //     ignore_missing_assemblies - if set to true, resolving TPA assemblies will not fail if an assembly can't be found on disk
 //                                 instead such entry will simply be ignored.
 //
+//  tpa, native, resources这些都是';'分割的path而不是vector. 而且native和resources中记录的是directory而不是文件的path
 //
 bool deps_resolver_t::resolve_probe_paths(probe_paths_t* probe_paths, std::unordered_set<pal::string_t>* breadcrumb, bool ignore_missing_assemblies)
 {
@@ -913,7 +915,7 @@ bool deps_resolver_t::resolve_probe_paths(probe_paths_t* probe_paths, std::unord
     }
 
     // If we found coreclr and the jit during native path probe, set the paths now.
-    probe_paths->coreclr = m_coreclr_path;
+    probe_paths->coreclr = m_coreclr_path; // 在 init_known_entry_path 里面设置
 
     return true;
 }

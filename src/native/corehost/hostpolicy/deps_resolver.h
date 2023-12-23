@@ -55,7 +55,7 @@ public:
         , m_needs_file_existence_checks(false)
     {
         m_fx_deps.resize(m_fx_definitions.size());
-        pal::get_default_servicing_directory(&m_core_servicing);
+        pal::get_default_servicing_directory(&m_core_servicing);    // TODO: 这个存储的是什么？ Q: serviceable 的 assets
 
         // If we are using the RID fallback graph and weren't explicitly given a graph, that of
         // the lowest (root) framework is used for higher frameworks.
@@ -66,6 +66,7 @@ public:
         }
 
         // Process from lowest (root) to highest (app) framework.
+        // 主要看的事情是对于每个libraries去targets下面的runtimeTarget(from deps.json)下面的library name下面读取所有的assets到m_fx_deps[i].m_deps_entries里面去。
         int lowest_framework = static_cast<int>(m_fx_definitions.size()) - 1;
         for (int i = lowest_framework; i >= 0; --i)
         {
@@ -87,7 +88,7 @@ public:
         }
 
         resolve_additional_deps(additional_deps_serialized, rid_resolution_options);
-
+        // 见log里面的 `-- Probe configurations:` => m_probes
         setup_probe_config(shared_stores, additional_probe_paths);
     }
 

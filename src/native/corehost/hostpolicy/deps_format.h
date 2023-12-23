@@ -96,7 +96,7 @@ private:
 
     std::vector<deps_entry_t> m_deps_entries[deps_entry_t::asset_types::count];
 
-    deps_assets_t m_assets;
+    deps_assets_t m_assets; // 两层索引，第一层是 targets[runtimeTarget]下面的包名，第二层是包下面的type("runtime", "native", "resources")
     rid_specific_assets_t m_rid_assets;
 
     pal::string_t m_deps_file;

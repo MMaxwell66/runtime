@@ -19,7 +19,7 @@ enum WaitMode
 
 struct PendingSync;
 
-class CLREventBase
+class CLREventBase  // based on windows event
 {
 public:
     CLREventBase()

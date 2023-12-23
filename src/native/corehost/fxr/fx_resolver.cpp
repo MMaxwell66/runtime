@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+// 关于rollback请看 docs\design\features\framework-version-resolution.md
+
 #include "fx_resolver.h"
 #include "host_startup_info.h"
 #include "trace.h"

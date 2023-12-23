@@ -40,7 +40,7 @@ namespace
 
         return path;
     }
-
+    // 这个逻辑很简单，就是读取json["runtimes"]，然后verbose log一下
     void populate_rid_fallback_graph(const json_parser_t::value_t& json, deps_json_t::rid_fallback_graph_t& rid_fallback_graph)
     {
         const auto& json_object = json.GetObject();
@@ -100,7 +100,7 @@ deps_json_t::rid_fallback_graph_t deps_json_t::get_rid_fallback_graph(const pal:
     populate_rid_fallback_graph(json.document(), rid_fallback_graph);
     return rid_fallback_graph;
 }
-
+// 对于json["libraries"]里面的所有library用get_assets_fn拿到所有的该library拥有的所有asset，然后填入到m_deps_entries中去。
 void deps_json_t::reconcile_libraries_with_targets(
     const json_parser_t::value_t& json,
     const std::function<bool(const pal::string_t&)>& library_has_assets_fn,
@@ -378,7 +378,8 @@ void deps_json_t::perform_rid_fallback(rid_specific_assets_t* portable_assets)
         }
     }
 }
-
+// 给我的感觉是一个兼容老版本的样子，似乎是老版本是用runtimeTarget+asset的方式去声明这些的？
+// 还有一个区别就是这些asset还要指定一个rid，从而它们是限定于某一个rid的。
 void deps_json_t::process_runtime_targets(const json_parser_t::value_t& json, const pal::string_t& target_name, rid_specific_assets_t* p_assets)
 {
     rid_specific_assets_t& assets = *p_assets;
@@ -439,7 +440,7 @@ void deps_json_t::process_runtime_targets(const json_parser_t::value_t& json, co
 
     perform_rid_fallback(&assets);
 }
-
+// 这个做的很简单，就是把deps.json["targets"][target_name]下面的信息填写到p_assets里面
 void deps_json_t::process_targets(const json_parser_t::value_t& json, const pal::string_t& target_name, deps_assets_t* p_assets)
 {
     deps_assets_t& assets = *p_assets;
@@ -492,7 +493,7 @@ void deps_json_t::process_targets(const json_parser_t::value_t& json, const pal:
         }
     }
 }
-
+// 对于deps_json_t::create_for_*这个target_name都是json["runtimeTarget"]，什么情况下会有别的可能行？
 void deps_json_t::load_framework_dependent(const json_parser_t::value_t& json, const pal::string_t& target_name)
 {
     process_runtime_targets(json, target_name, &m_rid_assets);

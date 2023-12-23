@@ -755,6 +755,7 @@ void VirtualCallStubManager::InitStatic()
     g_resetCacheIncr       = (INT32) CLRConfig::GetConfigValue(CLRConfig::INTERNAL_VirtualCallStubResetCacheIncr);
 #endif // STUB_LOGGING
 
+    // 初始化一些stub的指令模板
 #ifndef STUB_DISPATCH_PORTABLE
     DispatchHolder::InitializeStatic();
     ResolveHolder::InitializeStatic();

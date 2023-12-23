@@ -34,7 +34,7 @@ pal::hresult_t coreclr_t::create(
     const coreclr_property_bag_t &properties,
     std::unique_ptr<coreclr_t> &inst)
 {
-    if (!coreclr_bind(libcoreclr_path))
+    if (!coreclr_bind(libcoreclr_path)) // load dll & symbols
     {
         trace::error(_X("Failed to bind to CoreCLR at '%s'"), libcoreclr_path.c_str());
         return StatusCode::CoreClrBindFailure;
