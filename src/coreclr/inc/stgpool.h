@@ -78,6 +78,7 @@ public:
 // This class provides common definitions for heap segments.  It is both the
 //  base class for the heap, and the class for heap extensions (additional
 //  memory that must be allocated to grow the heap).
+// 看上去是 single linked list of array, m_pNextSeg是单链表next，m_pSegData, L(m_cbSegSize or m_cbSegNext)是array
 //*****************************************************************************
 class StgPoolSeg
 {

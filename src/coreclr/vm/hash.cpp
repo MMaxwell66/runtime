@@ -192,6 +192,7 @@ HashMap::HashMap()
 //  void HashMap::Init(unsigned cbInitialSize, CompareFnPtr ptr, bool fAsyncMode)
 //  set the initial size of the hash table and provide the comparison
 //  function pointer
+//  猜想，pLock的拿锁操作是调用方的事情，这个HashMap是不负责并发的，pLock传入只是为了debug的时候进行检查用的。
 //
 void HashMap::Init(DWORD cbInitialSize, CompareFnPtr ptr, BOOL fAsyncMode, LockOwner *pLock)
 {
@@ -583,7 +584,7 @@ UPTR HashMap::LookupValue(UPTR key, UPTR value)
                 UPTR storedVal = pBucket->GetValue(i);
                 // if compare function is provided
                 // dupe keys are possible, check if the value matches,
-// Not using compare function in DAC build.
+// Not using compare function in DAC build. 为啥？
 #ifndef DACCESS_COMPILE
                 if (CompareValues(value,storedVal))
 #endif

@@ -42,6 +42,7 @@ class FriendAssemblyDescriptor;
 
 // An assembly is the unit of deployment for managed code.
 // Assemblies are one to one with files since coreclr does not support multimodule assemblies.
+// How about AssemblyLoadContext, still one to one map?
 //
 class Assembly
 {

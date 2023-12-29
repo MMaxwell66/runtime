@@ -1390,6 +1390,7 @@ private:
 
         //-----------------------------------------------------------------------------------------
         // Implemented using a bmtMethodSlotTable
+        // new @ AllocateWorkingSlotTables
         bmtMethodSlotTable * pSlotTable;
 
         // Used to keep track of the default and static type constructors.
@@ -2273,6 +2274,7 @@ private:
     };  // class DeclaredMethodIterator
     friend class DeclaredMethodIterator;
 
+    // TypeDef->MethodList #
     inline SLOT_INDEX NumDeclaredMethods() { LIMITED_METHOD_CONTRACT; return bmtMethod->GetDeclaredMethodCount(); }
     inline DWORD NumDeclaredFields() { LIMITED_METHOD_CONTRACT; return bmtEnumFields->dwNumDeclaredFields; }
 

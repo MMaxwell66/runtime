@@ -5,7 +5,7 @@
 
 #include "stdafx.h"
 
-const BYTE CMiniMdBase::s_ModuleCol[] = {2,
+const BYTE CMiniMdBase::s_ModuleCol[] = {2, // 是一些常见的组合，比如这个就是GUID都是2byte，而string是2byte或者4byte，用来避免常用情况下需要new array。
   97,0,2,  101,2,2,  102,4,2,  102,6,2,  102,8,2,
   97,0,2,  101,2,4,  102,6,2,  102,8,2,  102,10,2,
 };

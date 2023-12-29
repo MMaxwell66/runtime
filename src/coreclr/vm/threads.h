@@ -5964,7 +5964,18 @@ struct ManagedThreadBase
 
 // DeadlockAwareLock is a base for building deadlock-aware locks.
 // Note that DeadlockAwareLock only works if ALL locks involved in the deadlock are deadlock aware.
-
+/*
+思路：
+1. 拿锁的时候：
+   while taking g_DeadlockAwareCrst, check dead lock
+   pThread->m_pBlockingLock = lock
+   take lock
+   DeadlockAwareLock.m_pHoldingThread = pThead
+   pThread->m_pBlockingLock = null
+2. 所以大概的思路就是把拿锁的原子操作放大到两步，用m_pBlockingLock来当作这个thread拿到了lock，用g_DeadlockAwareCrst同步并发检测，在检测过程中认为m_pBlockingLock等于拿到了锁，从而检测死锁的发生可能性。
+   而m_pBlockingLock置空的过程放到了拿锁之后，这样其他人检测的时候这个锁已经拿到了，保证了锁和m_pBlockingLock两个操作合起来的原子性。
+不知道有什么相关的论文讨论这种的，感觉如果有个assertion可能更好的证明这个事情。
+*/
 class DeadlockAwareLock
 {
  private:

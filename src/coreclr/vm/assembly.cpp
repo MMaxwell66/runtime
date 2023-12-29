@@ -193,6 +193,7 @@ void Assembly::Init(AllocMemTracker *pamTracker, LoaderAllocator *pLoaderAllocat
         // manifest modules of dynamic assemblies are always transient
         m_pModule = ReflectionModule::Create(this, pPEAssembly, pamTracker, REFEMIT_MANIFEST_MODULE_NAME);
     else
+        // 包括R2R，一些元信息的读取，table, section之类的，具体是哪些比较复杂，没细看。】
         m_pModule = Module::Create(this, pPEAssembly, pamTracker);
 
     InterlockedIncrement((LONG*)&g_cAssemblies);

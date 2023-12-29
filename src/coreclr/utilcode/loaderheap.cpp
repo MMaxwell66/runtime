@@ -689,6 +689,7 @@ class LoaderHeapSniffer
 
 // When a block is freed, we place this structure on the first bytes of the freed block (Allocations
 // are bumped in size if necessary to make sure there's room.)
+// But the code shows we new this struct instead of using the memory of the freed block? Why, is comment out of date, or stat show it is bad?
 struct LoaderHeapFreeBlock
 {
     public:

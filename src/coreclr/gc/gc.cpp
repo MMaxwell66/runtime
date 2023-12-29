@@ -2388,11 +2388,11 @@ const int n_heaps = 1;
 
 #endif //MULTIPLE_HEAPS
 
-size_t      gc_heap::card_table_element_layout[total_bookkeeping_elements + 1];
+size_t      gc_heap::card_table_element_layout[total_bookkeeping_elements + 1]; // offsetof
 uint8_t*    gc_heap::bookkeeping_start = nullptr;
 #ifdef USE_REGIONS
-uint8_t*    gc_heap::bookkeeping_covered_committed = nullptr;
-size_t      gc_heap::bookkeeping_sizes[total_bookkeeping_elements];
+uint8_t*    gc_heap::bookkeeping_covered_committed = nullptr;       // Q: 这个作用？
+size_t      gc_heap::bookkeeping_sizes[total_bookkeeping_elements]; // 目前已经使用的size，一个目的是负责commit page的处理。
 #endif //USE_REGIONS
 
 size_t      gc_heap::reserved_memory = 0;
@@ -3872,7 +3872,7 @@ bool region_allocator::init (uint8_t* start, uint8_t* end, size_t alignment, uin
     uint8_t* actual_start = start;
     region_alignment = alignment;
     large_region_alignment = LARGE_REGION_FACTOR * alignment;
-    global_region_start = (uint8_t*)align_region_up ((size_t)actual_start);
+    global_region_start = (uint8_t*)align_region_up ((size_t)actual_start);     // 注意以windows为例，这个address是64k align的，但是region一般要求1/2/4M align，所以实际上的空间会变少。
     uint8_t* actual_end = end;
     global_region_end = (uint8_t*)align_region_down ((size_t)actual_end);
     global_region_left_used = global_region_start;
@@ -3885,7 +3885,7 @@ bool region_allocator::init (uint8_t* start, uint8_t* end, size_t alignment, uin
     size_t total_num_units = (global_region_end - global_region_start) / region_alignment;
     total_free_units = (uint32_t)total_num_units;
 
-    uint32_t* unit_map = new (nothrow) uint32_t[total_num_units];
+    uint32_t* unit_map = new (nothrow) uint32_t[total_num_units];   // 这个空间有可能会有1MiB之大，比如说：256GiB / 1MB * sizeof(uint32_t)
     if (unit_map)
     {
         memset (unit_map, 0, sizeof (uint32_t) * total_num_units);
@@ -4078,11 +4078,11 @@ uint8_t* region_allocator::allocate (uint32_t num_units, allocate_direction dire
         while (((direction == allocate_forward) && (current_index < end_index)) ||
             ((direction == allocate_backward) && (current_index > end_index)))
         {
-            uint32_t current_val = *(current_index - ((direction == allocate_backward) ? 1 : 0));
+            uint32_t current_val = *(current_index - ((direction == allocate_backward) ? 1 : 0));   // left-most unit or right-most unit // 如果提前减掉呢？
             uint32_t current_num_units = get_num_units (current_val);
             bool free_p = is_unit_memory_free (current_val);
             dprintf (REGIONS_LOG, ("ALLOC[%s: %zd]%d->%d", (free_p ? "F" : "B"), (size_t)current_num_units,
-                (int)(current_index - region_map_left_start), (int)(current_index + current_num_units - region_map_left_start)));
+                (int)(current_index - region_map_left_start), (int)(current_index + current_num_units - region_map_left_start)));   // 这个log对于backward是不是有问题？
 
             if (free_p)
             {
@@ -4118,7 +4118,7 @@ uint8_t* region_allocator::allocate (uint32_t num_units, allocate_direction dire
                         free_block = current_index - current_num_units;
                     }
 
-                    make_busy_block (busy_block, num_units);
+                    make_busy_block (busy_block, num_units);    // both size (first and last block) is set
                     if ((current_num_units - num_units) > 0)
                     {
                         make_free_block (free_block, (current_num_units - num_units));
@@ -4144,7 +4144,7 @@ uint8_t* region_allocator::allocate (uint32_t num_units, allocate_direction dire
         }
     }
 
-    uint8_t* alloc = allocate_end (num_units, direction);
+    uint8_t* alloc = allocate_end (num_units, direction);   // Not comitted
 
     if (alloc)
     {
@@ -4250,7 +4250,7 @@ void region_allocator::delete_region_impl (uint8_t* region_start)
     uint32_t current_val = *current_index;
     assert (!is_unit_memory_free (current_val));
 
-    dprintf (REGIONS_LOG, ("----DEL %d (%u units)-----", (*current_index - *region_map_left_start), current_val));
+    dprintf (REGIONS_LOG, ("----DEL %d (%u units)-----", (*current_index - *region_map_left_start), current_val));  // 第一个参数为啥要取 '*' 感觉有问题啊
     uint32_t* region_end_index = current_index + current_val;
     uint8_t* region_end = region_address_of (region_end_index);
 
@@ -4277,7 +4277,7 @@ void region_allocator::delete_region_impl (uint8_t* region_start)
             free_block_size += previous_size;
         }
     }
-    if ((region_end != global_region_left_used) && (region_end != global_region_end))
+    if ((region_end != global_region_left_used) && (region_end != global_region_end))   // 一会儿比regin_map，一会儿比region...
     {
         uint32_t next_val = *region_end_index;
         if (is_unit_memory_free(next_val))
@@ -5245,7 +5245,7 @@ struct numa_reserved_block
 
 struct initial_memory_details
 {
-    imemory_data *initial_memory;
+    imemory_data *initial_memory;   // [normal * nhp] [large * nhp] [pinned * nhp]
     imemory_data *initial_normal_heap; // points into initial_memory_array
     imemory_data *initial_large_heap;  // points into initial_memory_array
     imemory_data *initial_pinned_heap; // points into initial_memory_array
@@ -5254,7 +5254,7 @@ struct initial_memory_details
     size_t block_size_large;
     size_t block_size_pinned;
 
-    int block_count;                // # of blocks in each
+    int block_count;                // # of blocks in each = nhp
     int current_block_normal;
     int current_block_large;
     int current_block_pinned;
@@ -5746,7 +5746,7 @@ void* virtual_alloc (size_t size, bool use_large_pages_p, uint16_t numa_node)
     if ((gc_heap::reserved_memory_limit - gc_heap::reserved_memory) < requested_size)
     {
         gc_heap::reserved_memory_limit =
-            GCScan::AskForMoreReservedMemory (gc_heap::reserved_memory_limit, requested_size);
+            GCScan::AskForMoreReservedMemory (gc_heap::reserved_memory_limit, requested_size);  // 对于built-in，就是直接 a + b
         if ((gc_heap::reserved_memory_limit - gc_heap::reserved_memory) < requested_size)
         {
             return 0;
@@ -6322,7 +6322,7 @@ struct node_heap_count
     int heap_count;
 };
 
-class heap_select
+class heap_select   // 负责分配heap, proc, numa_node之间的对应关系
 {
     heap_select() {}
 public:
@@ -7755,7 +7755,7 @@ void gc_mechanisms::init_mechanisms()
     promotion = FALSE;//TRUE;
     compaction = TRUE;
 #ifdef FEATURE_LOH_COMPACTION
-    loh_compaction = gc_heap::loh_compaction_requested();
+    loh_compaction = gc_heap::loh_compaction_requested();   // default false
 #else
     loh_compaction = FALSE;
 #endif //FEATURE_LOH_COMPACTION
@@ -9129,6 +9129,15 @@ void destroy_card_table (uint32_t* c_table)
     dprintf (2, ("Table Virtual Free : %zx", (size_t)&card_table_refcount(c_table)));
 }
 
+/*
+计算一堆 (end-start)/size 这种大小，size都是power of 2，然后存在sizes对应的enum的位置上。
++---------------+--------------+-------------------------+---------------------------+
+| uint32[/8192] | short[/4096] | uint32[/8MiB] (aligned) | byte[/4KiB] (ptr aligned) |
++---------------+--------------+-------------------------+---------------------------+
++----------------+----------------------+--------------+
+| uint8[/region] | seg_mapping[/region] | uint32[/512] |
++----------------+----------------------+--------------+
+*/
 void gc_heap::get_card_table_element_sizes (uint8_t* start, uint8_t* end, size_t sizes[total_bookkeeping_elements])
 {
     memset (sizes, 0, sizeof(size_t) * total_bookkeeping_elements);
@@ -9158,6 +9167,9 @@ void gc_heap::get_card_table_element_sizes (uint8_t* start, uint8_t* end, size_t
 #endif //BACKGROUND_GC
 }
 
+// layout[0] = sizeof(card_table_info), layout[i] = layout[i - 1] + sizes[i - 1]
+// all aligned is satisfied
+// 所以这些struct会一起分配，然后空间上连续？注意这里的size是覆盖整个[start, end)的。
 void gc_heap::get_card_table_element_layout (uint8_t* start, uint8_t* end, size_t layout[total_bookkeeping_elements + 1])
 {
     size_t sizes[total_bookkeeping_elements];
@@ -9185,7 +9197,7 @@ void gc_heap::get_card_table_element_layout (uint8_t* start, uint8_t* end, size_
 #endif //BACKGROUND_GC
         // commit_mark_array_by_range extends the end pointer of the commit to the next page boundary, we better make sure it
         // is reserved
-        OS_PAGE_SIZE       // total_bookkeeping_elements
+        OS_PAGE_SIZE       // total_bookkeeping_elements    // 这个在下面就没引用
     };
 
     layout[card_table_element] = ALIGN_UP(sizeof(card_table_info), alignment[card_table_element]);
@@ -9282,6 +9294,13 @@ bool gc_heap::on_used_changed (uint8_t* new_used)
     return true;
 }
 
+/* 基本上就是根据 to 的位置去计算要commit多少page。几个点：
+1. from用来区别是否是第一次，因为head这一块在上次就会被commit到，如果是之后的就不需要commit
+    所以只有第一次会commit head。具体来说第一次需要向下align，而之后则向上align
+2. 第一块有可能会跨区（甚至多个区），跨区由最后一个type负责，其他不管。
+3. BACKGROUND_GC的mark_array_element不在这里计算。 Q: 那由哪里负责？
+Q: region的allocate_backward怎么说？
+*/
 bool gc_heap::get_card_table_commit_layout (uint8_t* from, uint8_t* to,
                     uint8_t* commit_begins[total_bookkeeping_elements],
                     size_t commit_sizes[total_bookkeeping_elements],
@@ -9343,7 +9362,7 @@ bool gc_heap::get_card_table_commit_layout (uint8_t* from, uint8_t* to,
         {
             assert (additional_commit);
             required_begin = bookkeeping_start + card_table_element_layout[i] + bookkeeping_sizes[i];
-            required_end = required_begin + new_sizes[i] - bookkeeping_sizes[i];
+            required_end = required_begin + new_sizes[i] - bookkeeping_sizes[i]; // 你看上面的case是加两次，这里有变成加减一次了...统一一下更对其嘛
             commit_begin = align_on_page(required_begin);
         }
         assert (required_begin <= required_end);
@@ -9351,7 +9370,7 @@ bool gc_heap::get_card_table_commit_layout (uint8_t* from, uint8_t* to,
 
         commit_end = min (commit_end, align_lower_page(bookkeeping_start + card_table_element_layout[i + 1]));
         commit_begin = min (commit_begin, commit_end);
-        assert (commit_begin <= commit_end);
+        assert (commit_begin <= commit_end);    // 开个玩笑，这个assert有点过分了，上面一行已经min了。
 
         dprintf (REGIONS_LOG, ("required = [%p, %p), size = %zd", required_begin, required_end, required_end - required_begin));
         dprintf (REGIONS_LOG, ("commit   = [%p, %p), size = %zd", commit_begin, commit_end, commit_end - commit_begin));
@@ -9446,7 +9465,7 @@ uint32_t* gc_heap::make_card_table (uint8_t* start, uint8_t* end)
                  alloc_size, (size_t)mem, (size_t)(mem+alloc_size)));
 
 #ifdef USE_REGIONS
-    if (!inplace_commit_card_table (g_gc_lowest_address, global_region_allocator.get_left_used_unsafe()))
+    if (!inplace_commit_card_table (g_gc_lowest_address, global_region_allocator.get_left_used_unsafe())) // 这里要求初始分配的都是在left
     {
         dprintf (1, ("Card table commit failed"));
         GCToOSInterface::VirtualRelease (mem, alloc_size);
@@ -9478,20 +9497,21 @@ uint32_t* gc_heap::make_card_table (uint8_t* start, uint8_t* end)
     card_table_card_bundle_table (ct) = (uint32_t*)(mem + card_table_element_layout[card_bundle_table_element]);
 
 #ifdef FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+    // 这里有个相同的优化应用到不同的enum上，为了直接计算 base + addreess >> shift, 而不用 base + (address - low) >> shift, 把base直接往后shift一下。
     g_gc_card_bundle_table = translate_card_bundle_table(card_table_card_bundle_table(ct), g_gc_lowest_address);
 #endif
 #endif //CARD_BUNDLE
 
 #if defined(FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP) && defined (BACKGROUND_GC)
     if (gc_can_use_concurrent)
-    {
+    {   // 和上面一样的目的，但是能不能不要混用g_gc_lowest_address和start，直接用g_gc_lowest_address不好吗...
         SoftwareWriteWatch::InitializeUntranslatedTable(mem + card_table_element_layout[software_write_watch_table_element], start);
     }
 #endif //FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP && BACKGROUND_GC
 
 #ifdef USE_REGIONS
     map_region_to_generation = (region_info*)(mem + card_table_element_layout[region_to_generation_table_element]);
-    map_region_to_generation_skewed = map_region_to_generation - size_region_to_generation_table_of (0, g_gc_lowest_address);
+    map_region_to_generation_skewed = map_region_to_generation - size_region_to_generation_table_of (0, g_gc_lowest_address);   // 依旧同上
 #endif //USE_REGIONS
 
     seg_mapping_table = (seg_mapping*)(mem + card_table_element_layout[seg_mapping_table_element]);
@@ -12047,6 +12067,11 @@ bool gc_heap::is_region_demoted (uint8_t* obj)
 
 static GCSpinLock write_barrier_spin_lock;
 
+/*
+1. heap_segment->gen_num = gen_num
+2. map_region_to_generation[..] = gen_num
+3. if gen0/1, update ephemeral_low/ephemeral_high, when updated, call `GCToEEInterface::StompWriteBarrier`
+*/
 inline
 void gc_heap::set_region_gen_num (heap_segment* region, int gen_num)
 {
@@ -14042,7 +14067,7 @@ size_t gc_heap::adjust_segment_size_hard_limit (size_t limit, uint32_t nhp)
 #ifdef USE_REGIONS
 bool allocate_initial_regions(int number_of_heaps)
 {
-    initial_regions = new (nothrow) uint8_t*[number_of_heaps][total_generation_count][2];
+    initial_regions = new (nothrow) uint8_t*[number_of_heaps][total_generation_count][2];   // total_generation_count = 5 (0,1,2+loh+poh)   [2] => start, end
     if (initial_regions == nullptr)
     {
         return false;
@@ -14078,6 +14103,11 @@ bool allocate_initial_regions(int number_of_heaps)
 }
 #endif
 
+/*
+1. reserve region range (normally, 256GiB)
+2. new a region map (uint32 for each region size block)
+3. allocate inital regions for each heap, each heap has a regin for a generation (3+loh+poh)
+*/
 HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
                                 size_t loh_segment_size,
                                 size_t poh_segment_size
@@ -14221,8 +14251,8 @@ HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
     size_t initial_heap_size = soh_segment_size + loh_segment_size + poh_segment_size;
     uint16_t* heap_no_to_numa_node = nullptr;
 #ifdef MULTIPLE_HEAPS
-    reserved_memory_limit = initial_heap_size * number_of_heaps;
-    if (!heap_select::init(number_of_heaps))
+    reserved_memory_limit = initial_heap_size * number_of_heaps;    // 嗯，这个一般小于256GiB，在之后的virtual_alloc region的时候就会被expanded掉。所以至少对于region来说这行没什么用的样子。
+    if (!heap_select::init(number_of_heaps))    // 分配 processor, heap, numa 之间的映射关系
         return E_OUTOFMEMORY;
     if (GCToOSInterface::CanEnableGCNumaAware())
         heap_no_to_numa_node = heap_select::heap_no_to_numa_node;
@@ -14235,9 +14265,9 @@ HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
     if (heap_hard_limit)
 #endif //!COMMITTED_BYTES_SHADOW
     {
-        check_commit_cs.Initialize();
+        check_commit_cs.Initialize();   // CriticalSection
     }
-    decommit_lock.Initialize();
+    decommit_lock.Initialize();         // CriticalSection
 
 #ifdef USE_REGIONS
     if (regions_range)
@@ -14249,7 +14279,7 @@ HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
         // Right now all the non mark array portions are commmitted since I'm calling mark_card_table
         // on the whole range. This can be committed as needed.
         size_t reserve_size = regions_range;
-        uint8_t* reserve_range = (uint8_t*)virtual_alloc (reserve_size, use_large_pages_p);
+        uint8_t* reserve_range = (uint8_t*)virtual_alloc (reserve_size, use_large_pages_p); // default NOT large page, 但是large page会同时commit memory!
         if (!reserve_range)
             return E_OUTOFMEMORY;
 
@@ -14302,7 +14332,7 @@ HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
     uint64_t th = (uint64_t)SH_TH_CARD_BUNDLE;
 #endif //MULTIPLE_HEAPS
 
-    if (can_use_write_watch_for_card_table() && reserved_memory >= th)
+    if (can_use_write_watch_for_card_table() && reserved_memory >= th)  // for region, reserved_memory normally is 256GiB, so normally true for card_bundles
     {
         settings.card_bundles = TRUE;
     }
@@ -14320,7 +14350,7 @@ HRESULT gc_heap::initialize_gc (size_t soh_segment_size,
         gc_heap::latency_level = static_cast<gc_latency_level>(latency_level_from_config);
     }
 
-    init_static_data();
+    init_static_data(); // gen0 min/max, gen1 max
 
     g_gc_card_table = make_card_table (g_gc_lowest_address, g_gc_highest_address);
 
@@ -43089,6 +43119,11 @@ void gc_heap::set_static_data()
 }
 
 // Initialize the values that are not const.
+/*
+gen0 min: normally, min( max(256KiB, L3 Cache)  , 1/2 soh) / 8 * 5, 8 bytes aligned
+gen0 max: normally, 200MiB
+gem1 max: normally, soh / 2
+*/
 void gc_heap::init_static_data()
 {
     size_t gen0_min_size = get_gen0_min_size();
@@ -48271,7 +48306,7 @@ HRESULT GCHeap::Initialize()
         gc_heap::total_physical_mem = GCToOSInterface::GetPhysicalMemoryLimit (&gc_heap::is_restricted_physical_mem);
     }
     memset (gc_heap::committed_by_oh, 0, sizeof (gc_heap::committed_by_oh));
-    if (!gc_heap::compute_hard_limit())
+    if (!gc_heap::compute_hard_limit())     // 根据config就算各种limit
     {
         return CLR_E_GC_BAD_HARD_LIMIT;
     }
@@ -48536,7 +48571,7 @@ HRESULT GCHeap::Initialize()
 
     for (uint32_t i = 0; i < nhp; i++)
     {
-        GCHeap* Hp = new (nothrow) GCHeap();
+        GCHeap* Hp = new (nothrow) GCHeap();    // 如果是每个loop new 一个，gc_heap->vm_heap不是会不同的吗？
         if (!Hp)
             return E_OUTOFMEMORY;
 
@@ -51100,7 +51135,7 @@ size_t gc_heap::get_gen0_min_size()
 #ifdef SERVER_GC
         // performance data seems to indicate halving the size results
         // in optimal perf.  Ask for adjusted gen0 size.
-        gen0size = max(GCToOSInterface::GetCacheSizePerLogicalCpu(FALSE),(256*1024));
+        gen0size = max(GCToOSInterface::GetCacheSizePerLogicalCpu(FALSE),(256*1024));   // max( L3 Cache, 256KiB)
 
         // if gen0 size is too large given the available memory, reduce it.
         // Get true cache size, as we don't want to reduce below this.
@@ -51132,7 +51167,7 @@ size_t gc_heap::get_gen0_min_size()
 
         // if the total min GC across heaps will exceed 1/6th of available memory,
         // then reduce the min GC size until it either fits or has been reduced to cache size.
-        while ((gen0size * n_heaps) > (gc_heap::total_physical_mem / 6))
+        while ((gen0size * n_heaps) > (gc_heap::total_physical_mem / 6))    // L3 cache有1/6物理内存，233
         {
             gen0size = gen0size / 2;
             if (gen0size <= trueSize)

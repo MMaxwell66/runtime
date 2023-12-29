@@ -441,6 +441,7 @@ static void LogR2r(const char *msg, PEAssembly *pPEAssembly)
 // by another module. Each R2R image has a space to store a pointer to the
 // module that owns it. We set this pointer unless it has already be
 // initialized to point to another Module.
+// 其他的load context会以IL-only的形式加载这个dll
 static bool AcquireImage(Module * pModule, PEImageLayout * pLayout, READYTORUN_HEADER * pHeader)
 {
     STANDARD_VM_CONTRACT;

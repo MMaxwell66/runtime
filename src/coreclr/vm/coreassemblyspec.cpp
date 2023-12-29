@@ -90,7 +90,7 @@ STDAPI BinderAcquirePEImage(LPCWSTR             wszAssemblyPath,
         PEImageHolder pImage = PEImage::OpenImage(wszAssemblyPath, MDInternalImport_Default, bundleFileLocation);
 
         // Make sure that the IL image can be opened.
-        hr=pImage->TryOpenFile();
+        hr=pImage->TryOpenFile();   // Just CreateFile
         if (FAILED(hr))
         {
             goto Exit;
@@ -117,7 +117,7 @@ STDAPI BinderAcquireImport(PEImage                  *pPEImage,
 
     EX_TRY
     {
-        PEImageLayout* pLayout = pPEImage->GetOrCreateLayout(PEImageLayout::LAYOUT_ANY);
+        PEImageLayout* pLayout = pPEImage->GetOrCreateLayout(PEImageLayout::LAYOUT_ANY); // LoadLibrary or MapViewOfView or ...
 
         // CheckCorHeader includes check of NT headers too
         if (!pLayout->CheckCorHeader())
@@ -126,7 +126,7 @@ STDAPI BinderAcquireImport(PEImage                  *pPEImage,
         if (!pLayout->CheckFormat())
             IfFailGo(COR_E_BADIMAGEFORMAT);
 
-        pPEImage->GetPEKindAndMachine(&pdwPAFlags[0], &pdwPAFlags[1]);
+        pPEImage->GetPEKindAndMachine(&pdwPAFlags[0], &pdwPAFlags[1]);  // PEKind (Unmanaged/64bit etc), COFF.Machine
 
         *ppIAssemblyMetaDataImport = pPEImage->GetMDImport();
         if (!*ppIAssemblyMetaDataImport)

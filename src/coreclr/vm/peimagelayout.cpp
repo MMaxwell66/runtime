@@ -509,6 +509,7 @@ ConvertedImageLayout::~ConvertedImageLayout()
 #endif
 }
 
+// In windows, LoadLibrary
 LoadedImageLayout::LoadedImageLayout(PEImage* pOwner, HRESULT* loadFailure)
 {
     CONTRACTL

@@ -489,7 +489,7 @@ BOOL ClassLoader::CompareNestedEntryWithExportedType(IMDInternalImport *  pImpor
     return FALSE;
 }
 
-
+// is pEntry corresponding to mdCurrent? need to search all the way back to top-level
 BOOL ClassLoader::CompareNestedEntryWithTypeDef(IMDInternalImport *  pImport,
                                                 mdTypeDef            mdCurrent,
                                                 EEClassHashTable *   pClassHash,
@@ -519,7 +519,7 @@ BOOL ClassLoader::CompareNestedEntryWithTypeDef(IMDInternalImport *  pImport,
             // or not pEntry is a top level class
             // (pEntry is a top level class if its pEncloser is NULL)
             if (FAILED(pImport->GetNestedClassProps(mdCurrent, &mdCurrent)))
-                return pEntry->GetEncloser() == NULL;
+                return pEntry->GetEncloser() == NULL;   // mdCurrent reached top-level, so pEntry should also reach top-level to be the same
         }
         else // Keys don't match - wrong entry
             return FALSE;
@@ -809,6 +809,10 @@ void ClassLoader::GetClassValue(NameHandleTable nhTable,
 
 #ifndef DACCESS_COMPILE
 
+/*
+把TypeDef表中的class加入到 m_pAvailableClasses 哈希表中，用namespace+class name => TypeDef token
+注意点：1. 对于nested class，用的是namespace + itself's class name，没有外层的class name，所以是不是会有这种可能性：NamespaceA::classA::classB, NamespaceA::classC::classB，导致hash表有相同的key？
+*/
 VOID ClassLoader::PopulateAvailableClassHashTable(Module* pModule,
                                                   AllocMemTracker *pamTracker)
 {
@@ -1192,6 +1196,7 @@ TypeHandle ClassLoader::LookupTypeHandleForTypeKey(TypeKey *pKey)
 //        TypeHandle to be cached. Since we know that's what you *really* wanted, we'll just forget the
 //        Module/typedef stuff and give you the actual TypeHandle.
 //
+// 只描述一些可能性：正常的非R2R dll load之后m_pAvailableClasses中存着namespace+name->token的map。这个函数第一次会返回这个token。
 //
 BOOL ClassLoader::FindClassModuleThrowing(
     const NameHandle *    pName,
@@ -1453,7 +1458,7 @@ ClassLoader::LoadTypeHandleThrowing(
         }
         _ASSERTE(!foundEntry.IsNull());
 
-        if (pName->GetTypeToken() == mdtBaseType)
+        if (pName->GetTypeToken() == mdtBaseType)   // 正常是nil? 这个是什么case
         {   // We should return the found bucket in the pName
             pName->SetBucket(foundEntry);
         }
@@ -1542,7 +1547,7 @@ ClassLoader::LoadTypeHandleThrowing(
             break;
         }
         else
-        {   //#LoadTypeHandle_TypeForwarded
+        {   //#LoadTypeHandle_TypeForwarded     // case example?
             // pName is a host instance so it's okay to set fields in it in a DAC build
             const HashedTypeEntry& bucket = pName->GetBucket();
 
@@ -1999,7 +2004,7 @@ VOID ClassLoader::Init(AllocMemTracker *pamTracker)
 {
     STANDARD_VM_CONTRACT;
 
-    m_pUnresolvedClassHash = PendingTypeLoadTable::Create(GetAssembly()->GetLowFrequencyHeap(),
+    m_pUnresolvedClassHash = PendingTypeLoadTable::Create(GetAssembly()->GetLowFrequencyHeap(), // 对于System.Private.CoreLib这个是ExecutableAllocator分配的。
                                                           UNRESOLVED_CLASS_HASH_BUCKETS,
                                                           pamTracker);
 
@@ -2091,7 +2096,7 @@ TypeHandle ClassLoader::LoadTypeDefOrRefOrSpecThrowing(Module *pModule,
 
 // Given a token specifying a typeDef, and a module in which to
 // interpret that token, find or load the corresponding type handle.
-//
+// 这个应该就是实际去把token换成TypeHandle
 //
 /*static*/
 TypeHandle ClassLoader::LoadTypeDefThrowing(Module *pModule,
@@ -3772,6 +3777,8 @@ VOID ClassLoader::AddAvailableClassHaveLock(
                                             fNestedEncl,
                                             &sContext)) != NULL) {
             if (fNestedEncl) {
+                // GUESS: 因为nested不记录parent class name，所以这里有可能是namespace::other_class::same_class_name，所以要找到正确的entry？
+                //  pBucket->GetEncloser是entry的parent, enclEnclosing是target的parent
                 // Find entry for enclosing class - NOTE, this assumes that the
                 // enclosing class's TypeDef or ExportedType was inserted previously,
                 // which assumes that, when enuming TD's, we get the enclosing class first
@@ -3798,6 +3805,7 @@ VOID ClassLoader::AddAvailableClassHaveLock(
         // added to the beginning of the bucket, while nested classes are
         // added to the end.  So, a duplicate top-level class could hide
         // the previous type's EEClass* entry in the hash table.
+        // 但看上半段if的逻辑，并没有处理nested class真的name一样的情况，看上去nested class重名至少在这里是被允许的？
         EEClassHashEntry_t *pCaseInsEntry = NULL;
         LPUTF8 pszLowerCaseNS = NULL;
         LPUTF8 pszLowerCaseName = NULL;

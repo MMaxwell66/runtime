@@ -8042,7 +8042,7 @@ BOOL DeadlockAwareLock::TryBeginEnterLock()
             if (holdingThread == pThread)
             {
                 // Deadlock!
-                return FALSE;
+                return FALSE;   // 这个case是为了检测更robust还是有valid的case要检测？
             }
             if (holdingThread == NULL)
             {

@@ -185,6 +185,7 @@ STDAPI ReOpenMetaDataWithMemoryEx(
 static DWORD g_dwSystemDirectory = 0;
 static WCHAR * g_pSystemDirectory = NULL;
 
+// the folder containing coreclr.dll
 HRESULT GetInternalSystemDirectory(_Out_writes_to_opt_(*pdwLength,*pdwLength) LPWSTR buffer, __inout DWORD* pdwLength)
 {
     CONTRACTL {

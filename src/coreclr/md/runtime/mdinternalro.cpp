@@ -113,6 +113,7 @@ HRESULT MDInternalRO::QueryInterface(REFIID riid, void **ppUnk)
 
 //*****************************************************************************
 // Initialize
+// ECMA 335 II.24.2.6 Read top level, init data pointer, but not read stream data.
 //*****************************************************************************
 __checkReturn
 HRESULT MDInternalRO::Init(

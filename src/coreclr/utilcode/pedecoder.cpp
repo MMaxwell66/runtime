@@ -181,7 +181,7 @@ BOOL PEDecoder::HasNTHeaders() const
         if (cbNTHeaderEnd.IsOverflow())
         {
             RETURN FALSE;
-    }
+        }
 
         // Now check for a valid NT header
         if (m_size < cbNTHeaderEnd.Value())

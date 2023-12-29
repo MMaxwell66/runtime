@@ -277,7 +277,8 @@ BOOL PEImage::Equals(PEImage *pImage)
     return dac_cast<TADDR>(pImage) == dac_cast<TADDR>(this);
 }
 
-
+// PE CLR metadata (stream, stored the IL inside etc.)
+// ALL CLR data stored as table or stream in dll, this function read those information
 IMDInternalImport* PEImage::GetMDImport()
 {
     WRAPPER_NO_CONTRACT;
@@ -310,6 +311,7 @@ void PEImage::OpenMDImport()
         if(pMeta==NULL)
             return;
 
+        // 说大不大，说小不小，虽然这个里面分配的资源还好，但是毕竟比较复杂，随意不先加锁吗？还是说并发概率比较低？
         IfFailThrow(GetMetaDataInternalInterface((void *) pMeta,
                                                  cMeta,
                                                  ofRead,
@@ -332,7 +334,7 @@ void PEImage::OpenMDImport()
                 // dump file.
                 //
                 LPCSTR strModuleName;
-                IfFailThrow(m_pMDImport->GetScopeProps(&strModuleName, NULL));
+                IfFailThrow(m_pMDImport->GetScopeProps(&strModuleName, NULL));      // Get from the first Module in Module Table
                 m_sModuleFileNameHintUsedByDac.SetUTF8(strModuleName);
                 m_sModuleFileNameHintUsedByDac.Normalize();
             }
@@ -693,7 +695,7 @@ PTR_PEImageLayout PEImage::GetOrCreateLayoutInternal(DWORD imageLayoutMask)
     PTR_PEImageLayout pRetVal=GetExistingLayoutInternal(imageLayoutMask);
 
     if (pRetVal==NULL)
-    {
+    {   // 这个loaded指的是LoadLibrary，至于flat是直接解析dll？
         BOOL bIsLoadedLayoutSuitable = ((imageLayoutMask & PEImageLayout::LAYOUT_LOADED) != 0);
         BOOL bIsFlatLayoutSuitable = ((imageLayoutMask & PEImageLayout::LAYOUT_FLAT) != 0);
 

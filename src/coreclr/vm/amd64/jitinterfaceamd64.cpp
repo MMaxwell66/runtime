@@ -138,6 +138,9 @@ WriteBarrierManager g_WriteBarrierManager;
 // Use this somewhat hokey macro to concatenate the function start with the patch
 // label. This allows the code below to look relatively nice, but relies on the
 // naming convention which we have established for these helpers.
+// 我们之前应该只复制了 [JIT_PatchedCodeStart, JIT_PatchedCodeLast] 但是像 JIT_WriteBarrier_PreGrow64 这些是在这个range外面的，计算这个offset的意义是什么？
+// 稍微有点头绪了，这个WriteBarrier虽然我还不知作用是什么，但是GCHandle里面也有这种barrier其目的是在"write" handle的时候，更新GC的一些统计数据（这里是handle generation）以便在scan的使用使用。
+//    所以这个WriteBarrier估计也是类似的作用，去更新一些GC使用的数据，以便后续scan。那么这些不同的type就是对应不同的GC模式（segment, region, server GC etc.）的时候不同的处理需求。
 #define CALC_PATCH_LOCATION(func,label,offset)      CalculatePatchLocation((PVOID)func, (PVOID)func##_##label, offset)
 
 WriteBarrierManager::WriteBarrierManager() :
@@ -762,6 +765,7 @@ bool WriteBarrierManager::NeedDifferentWriteBarrier(bool bReqUpperBoundsCheck, b
     return m_currentWriteBarrier != writeBarrierType;
 }
 
+// 还没仔细看，不过这个似乎会去修改WB里面的一些immediate
 int WriteBarrierManager::UpdateEphemeralBounds(bool isRuntimeSuspended)
 {
     WriteBarrierType newType;

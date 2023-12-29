@@ -34,6 +34,8 @@
 // for variable types (e.g. !0 in generic signatures), string types
 // (i.e. E_T_STRING), object types (E_T_OBJECT), constructed types
 // (e.g. List<int>) and enums.
+//
+// ECMA-335 II.23.2
 //------------------------------------------------------------------------
 class SigParser
 {

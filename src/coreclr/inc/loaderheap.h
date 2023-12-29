@@ -1069,6 +1069,8 @@ class AllocMemHolder
 
 // This utility helps track loaderheap allocations. Its main purpose
 // is to backout allocations in case of an exception.
+// 统计数据本身放在AllocMemTrackerBlock，会去new这些，这个block一次能统计20个分配。把分配的mem+heap记录下来，析构的时候如果没release会去backout这些mem。
+// 这些mem都是从LoaderHeap里面拿到的。
 class AllocMemTracker
 {
     public:

@@ -92,6 +92,11 @@ struct CV_INFO_PDB70
 
 typedef DPTR(class PEImage)                PTR_PEImage;
 
+/*
+m_hFile = CreateFile(m_path)
+m_pLayouts[IMAGE_LOADED] = LoadLibrary
+其他见30行的注释
+*/
 class PEImage final
 {
 

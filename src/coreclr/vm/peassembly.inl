@@ -132,7 +132,7 @@ inline void PEAssembly::ValidateForExecution()
 inline BOOL PEAssembly::IsMarkedAsNoPlatform()
 {
     WRAPPER_NO_CONTRACT;
-    return (IsAfPA_NoPlatform(GetFlags()));
+    return (IsAfPA_NoPlatform(GetFlags())); // Assembly#1 Flags
 }
 
 

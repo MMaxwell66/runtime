@@ -1262,7 +1262,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
     }
     CONTRACTL_END;
 
-    pModule->EnsureLibraryLoaded();
+    pModule->EnsureLibraryLoaded(); // module load level FILE_LOAD_LOADLIBRARY
 
     // The following structs, defined as private members of MethodTableBuilder, contain the necessary local
     // parameters needed for BuildMethodTable Look at the struct definitions for a detailed list of all
@@ -2696,6 +2696,7 @@ MethodTableBuilder::EnumerateClassMethods()
     // Allocate an array to contain the method tokens as well as information about the methods.
     DWORD cMethAndGaps = hEnumMethod.EnumGetCount();
 
+    // method允许的数量有上限
     if ((DWORD)MAX_SLOT_INDEX <= cMethAndGaps)
         BuildMethodTableThrowException(IDS_CLASSLOAD_TOO_MANY_METHODS);
 
@@ -2707,6 +2708,7 @@ MethodTableBuilder::EnumerateClassMethods()
     enum { SeenCtor = 1, SeenInvoke = 2, SeenBeginInvoke = 4, SeenEndInvoke = 8};
     unsigned delegateMethodsSeen = 0;
 
+    // 读取每个method的各种属性，并做各种validation，最后填充到m_rgDeclaredMethods里面
     for (i = 0; i < cMethAndGaps; i++)
     {
         ULONG dwMethodRVA;
@@ -3140,7 +3142,7 @@ MethodTableBuilder::EnumerateClassMethods()
 
         //
         // Determine the method's type
-        //
+        // 比如说像FCall这类的
 
         if (IsReallyMdPinvokeImpl(dwMemberAttrs) || IsMiInternalCall(dwImplFlags))
         {
@@ -4959,7 +4961,7 @@ VOID MethodTableBuilder::TestMethodImpl(
 //*******************************************************************************
 //
 // Used by BuildMethodTable
-//
+// 一些validation加上查找 .ctor 和 .cctor 是否定义
 VOID
 MethodTableBuilder::ValidateMethods()
 {
@@ -12320,6 +12322,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
 
     {
         // As this is loading a parent type, we are allowed to override the load type limit.
+        // 读取继承的class的Method Table
         OVERRIDE_TYPE_LOAD_LEVEL_LIMIT(CLASS_LOAD_APPROXPARENTS);
         pParentMethodTable = LoadApproxParentThrowing(pModule, cl, &parentInst, &genericsInfo.typeContext);
     }
@@ -12345,11 +12348,13 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
         genericsInfo.numDicts = static_cast<WORD>(dwTotalDicts);
     }
 
+    // Nest class
     GetEnclosingClassThrowing(pInternalImport, pModule, cl, &tdEnclosing);
 
     BYTE nstructPackingSize = 0, nstructNLT = 0;
     BOOL fExplicitOffsets = FALSE;
     // NOTE: HasLayoutMetadata does not load classes
+    // TypeDef flag, 1. sequential or explicit 2. native interop ansi/unicode/auto 3. ClassLayout metadata table
     BOOL fHasLayout =
         !genericsInfo.fContainsGenericVariables &&
         HasLayoutMetadata(

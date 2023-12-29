@@ -64,7 +64,7 @@ CMiniMd::InitOnMem(
     BYTE   *pBuf = reinterpret_cast<BYTE*>(pvBuf);
 
     // Uncompress the schema from the buffer into our structures.
-    IfFailGo(SchemaPopulate(pvBuf, ulBufLen, &cbData));
+    IfFailGo(SchemaPopulate(pvBuf, ulBufLen, &cbData));         // Load byte structure of each table
     PREFAST_ASSUME(cbData <= ulBufLen);
 
     // There shouldn't be any pointer tables.
@@ -74,8 +74,9 @@ CMiniMd::InitOnMem(
         return PostError(CLDB_E_FILE_CORRUPT);
     }
 
-    // initialize the pointers to the rest of the data.
-    IfFailGo(InitializeTables(MetaData::DataBlob(pBuf + Align4(cbData), ulBufLen-cbData)));
+    // initialize the pointers to the rest of the data. // after #~.Tables
+    // 只是设置了开始位置，没有实际读取内容。
+    IfFailGo(InitializeTables(MetaData::DataBlob(pBuf + Align4(cbData), ulBufLen-cbData))); // 虽然说cbData已经是Align的，但这个写法也太不安全了吧，你到底想不想处理cbData不align的情况，想处理就有可能overflow了，长度会超出。
 
 ErrExit:
     return hr;

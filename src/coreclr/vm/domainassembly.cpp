@@ -60,7 +60,7 @@ DomainAssembly::DomainAssembly(AppDomain* pDomain, PEAssembly* pPEAssembly, Load
     pPEAssembly->AddRef();
     pPEAssembly->ValidateForExecution();
 
-    SetupDebuggingConfig();
+    SetupDebuggingConfig(); // System.Diagnostics.DebuggableAttribute
 }
 
 DomainAssembly::~DomainAssembly()
@@ -715,7 +715,7 @@ void DomainAssembly::Begin()
         m_pDomain->AddAssembly(this);
     }
     // Make it possible to find this DomainAssembly object from associated BINDER_SPACE::Assembly.
-    RegisterWithHostAssembly();
+    RegisterWithHostAssembly(); // 这个没加锁，但是LoadDomainAssemblyInternal里面没涉及到FindAssembly的竞争，不知道有没有问题
     m_fHostAssemblyPublished = true;
 }
 

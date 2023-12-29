@@ -276,7 +276,7 @@ namespace BINDER_SPACE
         {
             pathSource = BinderTracing::PathSource::ApplicationAssemblies;
         }
-        sCoreLib.Set(systemDirectory);
+        sCoreLib.Set(systemDirectory);  // 下面CombinePath就覆盖掉了sCoreLib，这个Set有什么意义吗...
         CombinePath(sCoreLib, sCoreLibName, sCoreLib);
 
         hr = AssemblyBinderCommon::GetAssembly(sCoreLib,
@@ -1012,7 +1012,7 @@ namespace BINDER_SPACE
         {
             LPCTSTR szAssemblyPath = const_cast<LPCTSTR>(assemblyPath.GetUnicode());
 
-            hr = BinderAcquirePEImage(szAssemblyPath, &pPEImage, bundleFileLocation);
+            hr = BinderAcquirePEImage(szAssemblyPath, &pPEImage, bundleFileLocation);   // new PEImage, CreateFile(READ)
             IF_FAIL_GO(hr);
         }
 

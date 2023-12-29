@@ -90,7 +90,7 @@ static const char* rDummy3ColNames[] = { "" };
 //-----------------------------------------------------------------------------
 
 // Define the array of Coded Token Definitions.
-#define MiniMdCodedToken(x) {ARRAY_SIZE(CMiniMdBase::mdt##x), CMiniMdBase::mdt##x, #x},
+#define MiniMdCodedToken(x) {ARRAY_SIZE(CMiniMdBase::mdt##x), CMiniMdBase::mdt##x, #x}, // CMiniMdBase::mdt##x defined in this file below, around ~L350
 const CCodedTokenDef g_CodedTokens [] = {
     MiniMdCodedTokens()
 };
@@ -454,7 +454,7 @@ CMiniMdBase::CMiniMdBase()
 #undef MiniMdTable
 #define MiniMdTable(tbl)                                    \
         m_TableDefs[TBL_##tbl] = g_Tables[TBL_##tbl].m_Def; \
-        m_TableDefs[TBL_##tbl].m_pColDefs = BYTEARRAY_TO_COLDES(s_##tbl##Col);
+        m_TableDefs[TBL_##tbl].m_pColDefs = BYTEARRAY_TO_COLDES(s_##tbl##Col);  // defined in mdcolumndescriptors.cpp
     MiniMdTables()
 #ifdef FEATURE_METADATA_EMIT_PORTABLE_PDB
     PortablePdbMiniMdTables()
@@ -535,7 +535,7 @@ CMiniMdBase::SchemaPopulate(
     ULONG   cbTotal;    // Bytes read for header + needed for tables.
 
     // Uncompress the schema from the buffer into our structures.
-    cb = m_Schema.LoadFrom(pvData, cbData);
+    cb = m_Schema.LoadFrom(pvData, cbData);     // Load top-level structure
 
     if ((cb > cbData) || (cb == (ULONG)(-1)))
     {
@@ -570,7 +570,7 @@ CMiniMdBase::SchemaPopulate(
     }
 
     // Populate the schema, based on the row counts and heap sizes.
-    IfFailRet(SchemaPopulate2(&cbTables));
+    IfFailRet(SchemaPopulate2(&cbTables));      // Load bytes for each row of each table
 
     // Check that header plus tables fits within the size given.
     if (!ClrSafeInt<ULONG>::addition(cb, cbTables, cbTotal) || (cbTotal > cbData))
@@ -625,13 +625,14 @@ CMiniMdBase::SchemaPopulate(
 // Iterate the tables, and fix the column sizes, based on size of data.
 //*****************************************************************************
 HRESULT CMiniMdBase::SchemaPopulate2(
-    ULONG *pcbTables,       // [out, optional] Put size needed for tables here.
+    ULONG *pcbTables,       // [out, optional] Put size needed for tables here. // header not included
     int    bExtra)          // Reserve an extra bit for rid columns?
 {
     HRESULT hr;                 // A result.
     ULONG   cbTotal = 0;        // Total size of all tables.
 
     // How big are the various pool inidices?
+    // 这边有一个问题是，在读取的时候，这些byte都是读四个然后and mask，但是读四个bytes会不会溢出？
     m_iStringsMask = (m_Schema.m_heaps & CMiniMdSchema::HEAP_STRING_4) ? 0xffffffff : 0xffff;
     m_iGuidsMask = (m_Schema.m_heaps & CMiniMdSchema::HEAP_GUID_4) ? 0xffffffff : 0xffff;
     m_iBlobsMask = (m_Schema.m_heaps & CMiniMdSchema::HEAP_BLOB_4) ? 0xffffffff : 0xffff;
@@ -706,10 +707,12 @@ CMiniMdBase::GetTableDefTemplate(
 
 //*****************************************************************************
 // Initialize the column defs for a table, based on their types and sizes.
+// ECMA 335 II.24.2.6
+// 核心做的事情就是计算每个column需要的byte，然后存储到pTable->m_pColDefs里面。
 //*****************************************************************************
 HRESULT
 CMiniMdBase::InitColsForTable(
-    CMiniMdSchema &Schema,          // Schema with sizes.
+    CMiniMdSchema &Schema,          // Schema with sizes.   // this is from #~ top level
     int            ixTbl,           // Index of table to init.
     CMiniTableDef *pTable,          // Table to init.
     int            bExtra,          // Extra bits for rid column.
@@ -720,6 +723,9 @@ CMiniMdBase::InitColsForTable(
     // Mark the array of columns as not allocated (not ALLOCATED_MEMORY_MARKER) for SetNewColumnDefinition
     const uint8_t MAX_COL_COUNT = 9;
     BYTE colData[1 + sizeof(CMiniColDef) * MAX_COL_COUNT];
+    // 不知道为什么要多allocate一个，并且置为0，我记得GCHandleType里面scan多个type的时候也有这样的多一个的结构，`BuildInclusionMap`
+    // 好了知道这边的一些思路了，这个是用来指示不同的可能性，因为这个col的组合可能性很多，但是想要做cache，所以就用第一个byte来指示，具体的只是方式还没完全看完，但目前有的是：
+    // 0是stack上面的，-1是dynamic分配的，正数是s_TableColumnDescriptors中预定义的组合。
     colData[0] = 0;
     CMiniColDef* pCols = BYTEARRAY_TO_COLDES(colData);
     BYTE        iOffset;                // Running size of a record.
@@ -733,7 +739,7 @@ CMiniMdBase::InitColsForTable(
 
     iOffset = 0;
 
-        pTemplate = GetTableDefTemplate(ixTbl);
+        pTemplate = GetTableDefTemplate(ixTbl); // 这个是标准里面对每个table的column的定义 II.22.2+，但是有些像string这种的offset就要我们在这里来填充，因为它们大小可变。
 
     PREFIX_ASSUME(pTemplate->m_pColDefs != NULL);
 
@@ -744,7 +750,7 @@ CMiniMdBase::InitColsForTable(
         pCols[ixCol] = pTemplate->m_pColDefs[ixCol];
 
         // Is the field a RID into a table?
-        if (pCols[ixCol].m_Type <= iRidMax)
+        if (pCols[ixCol].m_Type <= iRidMax) // seams like the simple index case?
         {
             iSize = cbRID(Schema.m_cRecs[pCols[ixCol].m_Type] << bExtra);
         }
@@ -761,7 +767,7 @@ CMiniMdBase::InitColsForTable(
             // Iterate the token list of this coded token.
             for (ULONG ixToken=0; ixToken<pCTD->m_cTokens; ++ixToken)
             {   // Ignore string tokens.
-                if (pCTD->m_pTokens[ixToken] != mdtString)
+                if (pCTD->m_pTokens[ixToken] != mdtString)  // example?
                 {
                     // Get the table for the token.
                     ULONG nTokenTable = CMiniMdRW::GetTableForToken(pCTD->m_pTokens[ixToken]);
@@ -834,7 +840,7 @@ CMiniMdBase::InitColsForTable(
         pCols[ixCol].m_cbColumn = iSize;
 
         // Align to 2 bytes.
-        iSize += iSize & 1;
+        iSize += iSize & 1; // doesn't see this in ECMA
 
         iOffset += iSize;
     }
@@ -851,9 +857,10 @@ CMiniMdBase::InitColsForTable(
     else
     {
         // We'll need to have pTable->m_pColDefs point to some data instead
-        hr = SetNewColumnDefinition(pTable, pCols, ixTbl);
+        // 会去查看 mdcolumndescriptors.cpp 中能否复用，否则新分配，但是新分配的应该是没有全局的管理去重用，也就是新分配的是有可能重复的。
+        hr = SetNewColumnDefinition(pTable, pCols, ixTbl);  // 这个ixTbl传入的目的是去index s_TableColumnDescriptors
     }
-    // If no key, set to a distinct value.
+    // If no key, set to a distinct value. // 这个不都是全局定义好的嘛，啥情况会需要在这里设置？
     if (pTable->m_iKey >= pTable->m_cCols)
         pTable->m_iKey = (BYTE) -1;
 
@@ -1157,6 +1164,7 @@ CMiniMdBase::FindCustomAttributeFor(
 
 //*****************************************************************************
 // See if we can find a globally shared Column Def Array for this table
+// i.e. the predefined ones in mdcolumndescriptors.cpp
 //*****************************************************************************
 BOOL
 CMiniMdBase::FindSharedColDefs(

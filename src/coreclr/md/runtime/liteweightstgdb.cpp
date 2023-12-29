@@ -22,13 +22,14 @@ HRESULT _CallInitOnMemHelper(CLiteWeightStgdb<CMiniMd> *pStgdb, ULONG cbData, LP
 
 //*****************************************************************************
 // Open an in-memory metadata section for read
+// Read top level, init data pointer, but not read stream data.
 //*****************************************************************************
 template <class MiniMd>
 __checkReturn
 HRESULT
 CLiteWeightStgdb<MiniMd>::InitOnMem(
     ULONG   cbData,     // count of bytes in pData
-    LPCVOID pData)      // points to meta data section in memory
+    LPCVOID pData)      // points to meta data section in memory    // 包括Metadata root
 {
     STORAGEHEADER  sHdr;                // Header for the storage.
     PSTORAGESTREAM pStream;             // Pointer to each stream.
@@ -145,7 +146,7 @@ CLiteWeightStgdb<MiniMd>::InitOnMem(
         // Found the compressed meta data stream.
         else if (strcmp(pStream->GetName(), COMPRESSED_MODEL_STREAM_A) == 0)
         {
-            IfFailGo( m_MiniMd.InitOnMem(pvCurrentData, cbCurrentData) );
+            IfFailGo( m_MiniMd.InitOnMem(pvCurrentData, cbCurrentData) );       // m_Tables
             bFoundMd = true;
         }
 

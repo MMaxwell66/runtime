@@ -31,6 +31,7 @@ HRESULT GetInternalWithRWFormat(
 // CheckFileFormat
 // This function will determine if the in-memory image is a readonly, readwrite,
 // or ICR format.
+// ECMA-335 II.24.2
 //*****************************************************************************
 HRESULT
 CheckFileFormat(
@@ -166,7 +167,7 @@ STDAPI GetMDInternalInterface(
 {
     HRESULT     hr = NOERROR;
     MDInternalRO *pInternalRO = NULL;
-    IMDCommon    *pInternalROMDCommon = NULL;
+    IMDCommon    *pInternalROMDCommon = NULL;   // removable
     MDFileFormat format;
 
     if (ppIUnk == NULL)
@@ -188,7 +189,7 @@ STDAPI GetMDInternalInterface(
     }
     else
     {
-        // Found a not-fully-compressed, ENC format.
+        // Found a not-fully-compressed, ENC format.    // it could be "MDFormat_ICR"?
         _ASSERTE( format == MDFormat_ReadWrite );
         IfFailGo( GetInternalWithRWFormat( pData, cbData, flags, riid, ppIUnk ) );
     }

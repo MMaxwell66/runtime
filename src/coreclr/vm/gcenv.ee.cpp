@@ -888,6 +888,10 @@ void GCToEEInterface::DiagWalkBGCSurvivors(void* gcContext)
 #endif //GC_PROFILING || FEATURE_EVENT_TRACE
 }
 
+/*
+这个函数的目的一方面可以blame一下，那个PR是为了将GC和VM解耦合，主要是像一些全局变量，比如像`g_ephemeral_low`这些，在VM和GC直接都有需要使用。
+然后比如说涉及到WriteBarrier的，像是根据GC的模式（region, segment, etc)的不同，在JIT的使用使用的WriteBarrier也会不同，这个interface的目的就是GC向VM通知这些变化，然后VM做出相应的响应。
+*/
 void GCToEEInterface::StompWriteBarrier(WriteBarrierParameters* args)
 {
     assert(args != nullptr);

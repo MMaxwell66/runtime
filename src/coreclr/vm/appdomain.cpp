@@ -1274,7 +1274,7 @@ void SystemDomain::LoadBaseSystemClasses()
 
     EX_TRY
     {
-        m_pSystemPEAssembly = PEAssembly::OpenSystem();
+        m_pSystemPEAssembly = PEAssembly::OpenSystem(); // load dll, read PE COR header, read Assembly#1 token
 
         // Only partially load the system assembly. Other parts of the code will want to access
         // the globals in this function before finishing the load.
@@ -2728,7 +2728,7 @@ DomainAssembly *AppDomain::LoadDomainAssemblyInternal(AssemblySpec* pIdentity,
         AssemblyBinder *pAssemblyBinder = pPEAssembly->GetAssemblyBinder();
         // Assemblies loaded with CustomAssemblyBinder need to use a different LoaderAllocator if
         // marked as collectible
-        pLoaderAllocator = pAssemblyBinder->GetLoaderAllocator();
+        pLoaderAllocator = pAssemblyBinder->GetLoaderAllocator();       // DefaultAssemblyBinder will return null
         if (pLoaderAllocator == NULL)
         {
             pLoaderAllocator = this->GetLoaderAllocator();
@@ -2805,6 +2805,7 @@ DomainAssembly *AppDomain::LoadDomainAssemblyInternal(AssemblySpec* pIdentity,
     RETURN result;
 } // AppDomain::LoadDomainAssembly
 
+// 抛开各种死锁之类的，主要load逻辑是在`TryIncrementalLoad`里面。
 DomainAssembly *AppDomain::LoadDomainAssembly(FileLoadLock *pLock, FileLoadLevel targetLevel)
 {
     CONTRACT(DomainAssembly *)
@@ -2845,6 +2846,7 @@ DomainAssembly *AppDomain::LoadDomainAssembly(FileLoadLock *pLock, FileLoadLevel
 
         // We cannot set a target level higher than that allowed by the limiter currently.
         // This is because of anti-deadlock constraints.
+        // 见下面的 `limit.SetLoadLevel` 好像一个情况是resolve这个assembly的时候如果引用了其他的assembly，不能够让那个assembly load到一个更高的级别。至于为啥不能，还要看看。
         if (immediateTargetLevel > limit.GetLoadLevel())
             immediateTargetLevel = limit.GetLoadLevel();
 
@@ -2882,7 +2884,7 @@ DomainAssembly *AppDomain::LoadDomainAssembly(FileLoadLock *pLock, FileLoadLevel
                 }
             }
 
-            if (pLock->GetLoadLevel() == immediateTargetLevel-1)
+            if (pLock->GetLoadLevel() == immediateTargetLevel-1)    // 这个为什么不是<=?
             {
                 LOG((LF_LOADER, LL_INFO100, "LOADER: %x:***%s*\t<<<Load limited due to detected deadlock, %s\n",
                      pFile->GetAppDomain(), pFile->GetSimpleName(),
@@ -2915,6 +2917,8 @@ DomainAssembly *AppDomain::LoadDomainAssembly(FileLoadLock *pLock, FileLoadLevel
     // (An alternate, and possibly preferable, strategy here would be for all callers to explicitly
     // specify the minimum load level acceptable and throw if not reached.)
 
+    // 为什么不是target？是不是意味着这个函数不保证能load到target level？
+    // 感觉需要看看可能发生死锁的场景
     pFile->RequireLoadLevel((FileLoadLevel)(immediateTargetLevel-1));
 
 
@@ -3071,7 +3075,7 @@ DomainAssembly * AppDomain::FindAssembly(PEAssembly * pPEAssembly, FindAssemblyO
 
     const bool includeFailedToLoad = (options & FindAssemblyOptions_IncludeFailedToLoad) != 0;
 
-    if (pPEAssembly->HasHostAssembly())
+    if (pPEAssembly->HasHostAssembly())     // for file based, this is true, but when this is false?
     {
         DomainAssembly * pDA = pPEAssembly->GetHostAssembly()->GetDomainAssembly();
         if (pDA != nullptr && (pDA->IsLoaded() || (includeFailedToLoad && pDA->IsError())))

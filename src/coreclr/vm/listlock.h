@@ -101,7 +101,7 @@ public:
         if (!m_deadlock.TryBeginEnterLock())
             return FALSE;
 
-        DeadlockAwareLock::BlockingLockHolder dlLock;
+        DeadlockAwareLock::BlockingLockHolder dlLock;   // GetThread()->m_pBlockingLock = null
         m_Crst.Enter();
         m_deadlock.EndEnterLock();
 
@@ -239,6 +239,7 @@ public:
     };
 };
 
+// List itself has a lock, each element also has a lock
 template < typename ELEMENT >
 class ListLockBase
 {

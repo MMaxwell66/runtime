@@ -312,9 +312,10 @@ inline PTR_PEImage PEImage::FindByPath(LPCWSTR pPath, BOOL isInBundle /* = TRUE 
 
     PEImageLocator locator(pPath, isInBundle);
     DWORD dwHash = CaseHashHelper(pPath, (COUNT_T) u16_strlen(pPath));
-    return (PEImage *) s_Images->LookupValue(dwHash, &locator);
+    return (PEImage *) s_Images->LookupValue(dwHash, &locator);     // hash不考虑bundle，但是 PEImage::CompareImage 里面负责了这个检查。在s_Images->Init的时候，这个compare被传入。
 }
 
+// new PEImage, 设置path，没有多余操作
 /* static */
 inline PTR_PEImage PEImage::OpenImage(LPCWSTR pPath, MDInternalImportFlags flags /* = MDInternalImport_Default */, BundleFileLocation bundleFileLocation)
 {
@@ -328,7 +329,7 @@ inline PTR_PEImage PEImage::OpenImage(LPCWSTR pPath, MDInternalImportFlags flags
 
     CrstHolder holder(&s_hashLock);
 
-    PEImage* found = FindByPath(pPath, bundleFileLocation.IsValid());
+    PEImage* found = FindByPath(pPath, bundleFileLocation.IsValid());   // case insenstive
     if (found == (PEImage*) INVALIDENTRY)
     {
         // We did not find the entry in the Cache, and we've been asked to only use the cache.
@@ -338,7 +339,7 @@ inline PTR_PEImage PEImage::OpenImage(LPCWSTR pPath, MDInternalImportFlags flags
         }
 
         PEImageHolder pImage(new PEImage);
-        pImage->Init(pPath, bundleFileLocation);
+        pImage->Init(pPath, bundleFileLocation);    // 只是单纯的记录了path，没有别的操作。
 
         pImage->AddToHashMap();
         return dac_cast<PTR_PEImage>(pImage.Extract());

@@ -60,16 +60,16 @@ namespace BINDER_SPACE
         PEKIND PeKind = peNone;
         DWORD dwPAFlags[2];
         IF_FAIL_GO(BinderAcquireImport(pPEImage, &pIMetaDataAssemblyImport, dwPAFlags));
-        IF_FAIL_GO(AssemblyBinderCommon::TranslatePEToArchitectureType(dwPAFlags, &PeKind));
+        IF_FAIL_GO(AssemblyBinderCommon::TranslatePEToArchitectureType(dwPAFlags, &PeKind));    // IL or R2R based on machine type & PE Kind
         SetArchitecture(PeKind);
 
         _ASSERTE(pIMetaDataAssemblyImport != NULL);
 
         // Get the assembly token
-        IF_FAIL_GO(pIMetaDataAssemblyImport->GetAssemblyFromScope(&mda));
+        IF_FAIL_GO(pIMetaDataAssemblyImport->GetAssemblyFromScope(&mda));   // Assembly#1
 
         // Get name and metadata
-        IF_FAIL_GO(pIMetaDataAssemblyImport->GetAssemblyProps(
+        IF_FAIL_GO(pIMetaDataAssemblyImport->GetAssemblyProps(              // Just read the assembly table info
                         mda,            // [IN] The Assembly for which to get the properties.
                         &pvPublicKeyToken,  // [OUT] Pointer to the PublicKeyToken blob.
                         &dwPublicKeyToken,  // [OUT] Count of bytes in the PublicKeyToken Blob.
@@ -108,7 +108,7 @@ namespace BINDER_SPACE
         }
 
         // See if the assembly[def] is retargetable (ie, for a generic assembly).
-        if (IsAfRetargetable(dwRefOrDefFlags))
+        if (IsAfRetargetable(dwRefOrDefFlags))  // 还是没理解这个的用途
         {
             SetIsRetargetable(TRUE);
         }
@@ -135,14 +135,14 @@ namespace BINDER_SPACE
         // Set public key and/or public key token (if we have it)
         if (dwPublicKeyToken && pvPublicKeyToken)
         {
-            SBuffer publicKeyOrTokenBLOB((const BYTE *) pvPublicKeyToken, dwPublicKeyToken);
+            SBuffer publicKeyOrTokenBLOB((const BYTE *) pvPublicKeyToken, dwPublicKeyToken);    // this will allocate and copy the keys
 
             if (IsAfPublicKey(dwRefOrDefFlags))
             {
                 SBuffer publicKeyTokenBLOB;
 
                 IF_FAIL_GO(GetTokenFromPublicKey(publicKeyOrTokenBLOB, publicKeyTokenBLOB));
-                GetPublicKeyTokenBLOB().Set(publicKeyTokenBLOB);
+                GetPublicKeyTokenBLOB().Set(publicKeyTokenBLOB);    // last 8 bytes of sha1 of the blob bytes
             }
             else
             {

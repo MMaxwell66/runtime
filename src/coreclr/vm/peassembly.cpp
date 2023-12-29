@@ -710,7 +710,7 @@ PEAssembly::PEAssembly(
         ThrowHR(COR_E_ASSEMBLYEXPECTED);
 
     // Verify name eagerly
-    LPCUTF8 szName = GetSimpleName();
+    LPCUTF8 szName = GetSimpleName();   // the name specifed in the Assembly Table, ECMA 335 II.22.2
     if (!*szName)
     {
         ThrowHR(COR_E_BADIMAGEFORMAT, BFA_EMPTY_ASSEMDEF_NAME);

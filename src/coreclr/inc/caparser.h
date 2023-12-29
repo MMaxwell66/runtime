@@ -15,6 +15,7 @@
 
 #include "stgpooli.h"
 
+// ECMA-335 II.23.3
 class CustomAttributeParser {
 public:
     CustomAttributeParser(              // Constructor for CustomAttributeParser.

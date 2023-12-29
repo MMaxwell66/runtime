@@ -809,7 +809,7 @@ bool Module::NeedsGlobalMethodTable()
     return false;
 }
 
-
+// TypeDef#1
 MethodTable *Module::GetGlobalMethodTable()
 {
     CONTRACT (MethodTable *)
@@ -827,7 +827,7 @@ MethodTable *Module::GetGlobalMethodTable()
     if ((m_dwPersistedFlags & COMPUTED_GLOBAL_CLASS) == 0)
     {
         MethodTable *pMT = NULL;
-
+        // TypeDef#1 (<Module>)'s field or method
         if (NeedsGlobalMethodTable())
         {
             pMT = ClassLoader::LoadTypeDefThrowing(this, COR_GLOBAL_PARENT_TOKEN,
@@ -1449,6 +1449,7 @@ BOOL Module::IsRuntimeWrapExceptionsStatusComputed()
     return (m_dwPersistedFlags & COMPUTED_WRAP_EXCEPTIONS);
 }
 
+// see declaration comment, `System.Runtime.CompilerServices.RuntimeCompatibilityAttribute`
 BOOL Module::IsRuntimeWrapExceptions()
 {
     CONTRACTL
@@ -1881,6 +1882,7 @@ void Module::AllocateMaps()
     nTotal += m_ManifestModuleReferencesMap.dwCount;
     nTotal += m_MethodDefToPropertyInfoMap.dwCount;
 
+    // not tracked by AllocMemTracker?
     _ASSERTE (m_pAssembly && m_pAssembly->GetLowFrequencyHeap());
     pTable = (PTR_TADDR)(void*)m_pAssembly->GetLowFrequencyHeap()->AllocMem(nTotal * S_SIZE_T(sizeof(TADDR)));
 
@@ -5377,7 +5379,7 @@ void Module::CreateAssemblyRefByNameTable(AllocMemTracker *pamTracker)
     if (dwMaxRid == 0)
         return;
 
-    S_SIZE_T            dwAllocSize = S_SIZE_T(sizeof(LPWSTR)) * S_SIZE_T(dwMaxRid);
+    S_SIZE_T            dwAllocSize = S_SIZE_T(sizeof(LPCSTR)) * S_SIZE_T(dwMaxRid);
     m_AssemblyRefByNameTable = (LPCSTR *) pamTracker->Track( pHeap->AllocMem(dwAllocSize) );
 
     DWORD dwCount = 0;

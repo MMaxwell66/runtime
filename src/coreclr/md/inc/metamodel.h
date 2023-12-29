@@ -718,7 +718,7 @@ public:
         HRESULT hr;
         RID     ridBegin;   // RID of first entry.
         RID     ridEnd;     // RID of first entry past last entry.
-
+        // 修改一下结束条件就可以直接用二叉搜索找到begin+end，哪还需要再去线性搜索一下...
         // Search for any entry in the table.
         IfFailRet(static_cast<Impl*>(this)->vSearchTable(ixTbl, sColumn, ulTarget, &ridBegin));
 
@@ -1230,7 +1230,7 @@ public:
             goto ErrExit;
         }
 
-        hr = CommonGetNameOfCustomAttribute(rid, &szNamespaceTmp, &szNameTmp);
+        hr = CommonGetNameOfCustomAttribute(rid, &szNamespaceTmp, &szNameTmp);  // 大致的思路是 CustomAttribute->Type(.ctor)->Type(of the .ctor)->Name
         if (hr != S_OK)
             goto ErrExit;
 
@@ -1327,11 +1327,13 @@ public:
         case mdtMethodDef:
             {
                 // Follow the parent.
+                // 这边似乎并没有做什么检查，如果MethodDef和TypeDef直接的顺序关系被破环了，有一定风现。
+                // 比如TypeDef表坏了的话，就会导致这个method对应的找到一个恶意的type
                 IfFailGo( FindParentOfMethodHelper(tkTypeTmp, &tkTypeTmp));
                 goto CheckParentType;
             }
             break;
-        case mdtMemberRef:
+        case mdtMemberRef:  // 一种情况是Attribute不在这个assembly中定义
             {
                 MemberRefRec *pMember;
                 IfFailGo(GetMemberRefRecord(ridTmp, &pMember));

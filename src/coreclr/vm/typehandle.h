@@ -82,6 +82,7 @@ class ComCallWrapperTemplate;
 // Clients of TypeHandle don't need to know any of this detail; just use the
 // GetInstantiation and HasInstantiation methods.
 
+// just a union of size(void *)
 class TypeHandle
 {
 public:
