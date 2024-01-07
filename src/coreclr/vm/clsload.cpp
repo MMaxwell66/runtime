@@ -5,6 +5,25 @@
 //
 // ============================================================================
 
+/*
+LoadTypeHandleThrowing: Name->TypeHandle
+    # Cover TypeForwarded case, handle module hierarchy
+    Name -> TypeDef
+    LoadTypeDefThrowing: TypeDef -> TypeHandle
+        # check cache
+        TypeKey(TypeDef)
+        LoadTypeHandleForTypeKey: TypeKey -> TypeHandle
+            DoIncrementalLoad
+            CreateTypeHandleForTypeKey: TypeKey -> TypeHandle
+                if IsConstructed():
+                    CreateTypeHandleForTypeDefThrowing: TypeDef -> TypeHandle
+
+LoadTypeDefOrRefThrowing
+
+*/
+
+// TODO: read ready to run case, ExportedType, reflect
+
 #include "common.h"
 #include "winwrap.h"
 #include "ceeload.h"
@@ -74,6 +93,10 @@ NameHandle::NameHandle(Module* pModule, mdToken token) :
     SUPPORTS_DAC;
 }
 
+
+// 有几个问题：
+//  1. 什么Module是Collactible?
+//  2. 依赖关系就靠GetCreationNumber来搞定吗？
 
 // This method determines the "loader module" for an instantiated type
 // or method. The rule must ensure that any types involved in the
@@ -178,7 +201,7 @@ ComputeCollectibleLoaderModule:
 
             if (pLoaderAllocatorCheck != pLoaderAllocatorOfDefiningType &&
                 pLoaderAllocatorCheck->IsCollectible() &&
-                pLoaderAllocatorCheck->GetCreationNumber() > oldestFoundAge)
+                pLoaderAllocatorCheck->GetCreationNumber() > oldestFoundAge)    // 这个似乎是一个全局递增的。
             {
                 pOldestLoaderModule = pModuleCheck;
                 pOldestLoaderAllocator = pLoaderAllocatorCheck;
@@ -617,6 +640,8 @@ BOOL ClassLoader::IsNested(ModuleBase *pModule, mdToken token, mdToken *mdEnclos
     }
 }
 
+// 有个问题，这个有一个情况是根据Module, token去判断，但是这个对于那些用 namespace+name 的情况下看上去要求先对encloser去resolve得到Bucket才能去判断。
+// 在 CoreLibBinder 里面是先去resolve encloser，但是其它调用者也遵守了这个吗？
 BOOL ClassLoader::IsNested(const NameHandle* pName, mdToken *mdEncloser)
 {
     CONTRACTL
@@ -633,7 +658,7 @@ BOOL ClassLoader::IsNested(const NameHandle* pName, mdToken *mdEncloser)
     if (pName->GetTypeModule()) {
         if (TypeFromToken(pName->GetTypeToken()) == mdtBaseType)
         {
-            if (!pName->GetBucket().IsNull())
+            if (!pName->GetBucket().IsNull())   // CoreLibBinder的nested就应该是这个case
                 return TRUE;
             return FALSE;
         }
@@ -644,6 +669,7 @@ BOOL ClassLoader::IsNested(const NameHandle* pName, mdToken *mdEncloser)
         return FALSE;
 }
 
+// 只在这个ClassLoader所属的Asssembly中的hash table查找。处理了pName是nested的情况。
 void ClassLoader::GetClassValue(NameHandleTable nhTable,
                                     const NameHandle *pName,
                                     HashDatum *pData,
@@ -754,7 +780,7 @@ void ClassLoader::GetClassValue(NameHandleTable nhTable,
 
             if (isNested)
             {
-                ModuleBase *pNameModule = pName->GetTypeModule();
+                ModuleBase *pNameModule = pName->GetTypeModule();   // 继IsNested的comments：看这里要求这个NameModule是not null对于直接用namespace+name的这个好像不是这样的，所以感觉对于nested用名字的话应该是要先resolve parent
                 PREFIX_ASSUME(pNameModule != NULL);
 
                 EEClassHashTable::LookupContext sContext;
@@ -1167,7 +1193,7 @@ TypeHandle ClassLoader::LookupTypeHandleForTypeKey(TypeKey *pKey)
 }
 
 // FindClassModuleThrowing discovers which module the type you're looking for is in and loads the Module if necessary.
-// Basically, it iterates through all of the assembly's modules until a name match is found in a module's
+// Basically, it iterates through all of the assembly's modules until a name match is found in a module's   // 但在.NET Core下一个Assembly应该是只有一个module，所以其实只是单看这个module
 // AvailableClassHashTable.
 //
 // The possible outcomes are:
@@ -1267,6 +1293,7 @@ BOOL ClassLoader::FindClassModuleThrowing(
 
     EEClassHashEntry_t * pBucket = foundEntry.GetClassHashBasedEntryValue();
 
+    // 并发二次检测
     if (pBucket == NULL)
     {
         // Take the lock. To make sure the table is not being built by another thread.
@@ -1443,6 +1470,7 @@ ClassLoader::LoadTypeHandleThrowing(
         // lock at this point...).  This may discover that the type is actually
         // defined in another module...
 
+        // 在这个class loader所属的assembly中根据pName查找token。如果token是TypeDef，module是class loader所属的module。如果token是ExportedType，module是token对应的其他的module。
         if (!pClsLdr->FindClassModuleThrowing(
                 pName,
                 &typeHnd,
@@ -1458,7 +1486,7 @@ ClassLoader::LoadTypeHandleThrowing(
         }
         _ASSERTE(!foundEntry.IsNull());
 
-        if (pName->GetTypeToken() == mdtBaseType)   // 正常是nil? 这个是什么case
+        if (pName->GetTypeToken() == mdtBaseType)   // 正常是nil? 这个是什么case。一个case是CoreLib在load nested type的时候，parent type会用mdtBaseType
         {   // We should return the found bucket in the pName
             pName->SetBucket(foundEntry);
         }
@@ -1547,7 +1575,7 @@ ClassLoader::LoadTypeHandleThrowing(
             break;
         }
         else
-        {   //#LoadTypeHandle_TypeForwarded     // case example?
+        {   //#LoadTypeHandle_TypeForwarded     // 应该是ExportedType的情况
             // pName is a host instance so it's okay to set fields in it in a DAC build
             const HashedTypeEntry& bucket = pName->GetBucket();
 
@@ -2097,7 +2125,8 @@ TypeHandle ClassLoader::LoadTypeDefOrRefOrSpecThrowing(Module *pModule,
 // Given a token specifying a typeDef, and a module in which to
 // interpret that token, find or load the corresponding type handle.
 // 这个应该就是实际去把token换成TypeHandle
-//
+// 对于非reflection核心逻辑就是 pModule->GetClassLoader()->LoadTypeHandleForTypeKey
+// ~~module和ClassLoader对应的module似乎有可能不同~~ 这是static，所以 pModule->GetClassLoader()
 /*static*/
 TypeHandle ClassLoader::LoadTypeDefThrowing(Module *pModule,
                                             mdToken typeDef,
@@ -2253,6 +2282,7 @@ TypeHandle ClassLoader::LoadTypeDefThrowing(Module *pModule,
             }
             else
             {
+                // pTargetInstantiation 每传入，所以这里load的是open type?
                 TypeKey typeKey(pModule, typeDef);
                 typeHnd = pModule->GetClassLoader()->LoadTypeHandleForTypeKey(&typeKey,
                                                                               typeHnd,
@@ -2681,7 +2711,7 @@ ClassLoader::GetEnclosingClassThrowing(
 // The exact instantiated types will be loaded later by LoadInstantiatedInfo.
 // We do this to avoid cycles early in class loading caused by definitions such as
 //   struct M : ICloneable<M>                     // load ICloneable<object>
-//   class C<T> : D<C<T>,int> for any T           // load D<object,int>
+//   class C<T> : D<C<T>,int> for any T           // load D<object,int>     <==
 //
 //static
 TypeHandle
@@ -2705,6 +2735,7 @@ ClassLoader::LoadApproxTypeThrowing(
 
     IMDInternalImport * pInternalImport = pModule->GetMDImport();
 
+    // 在ECMA上没有看到明确的说明，但是看起来如果是那种generic的继承，会使用TypeSpec
     if (TypeFromToken(tok) == mdtTypeSpec)
     {
         ULONG cSig;
@@ -2716,6 +2747,7 @@ ClassLoader::LoadApproxTypeThrowing(
         IfFailThrowBF(sigptr.GetElemType(&type), BFA_BAD_SIGNATURE, pModule);
 
         // The only kind of type specs that we recognise are instantiated types
+        // 哦，这个state很强啊，虽然我看TypeSpc里面还有一些像pointer之类的东西，但他们是不是不会进到这里？
         if (type != ELEMENT_TYPE_GENERICINST)
             pModule->GetAssembly()->ThrowTypeLoadException(pInternalImport, tok, IDS_CLASSLOAD_GENERAL);
 
@@ -2758,6 +2790,7 @@ ClassLoader::LoadApproxTypeThrowing(
         else
         {
             // approxTypes, i.e. approximate reference types by Object, i.e. load the canonical type
+            // 注意这个 pSig, cSig是原始的副本，没有读取过genericTok
             RETURN SigPointer(pSig, cSig).GetTypeHandleThrowing(
                 pModule,
                 pClassTypeContext,
@@ -2835,6 +2868,8 @@ ClassLoader::LoadApproxParentThrowing(
         if (pParentMethodTable->IsInterface())
             pAssembly->ThrowTypeLoadException(pInternalImport, cl, IDS_CLASSLOAD_PARENTINTERFACE);
 
+        // 似乎正常的interface计算继承了interface在IL里面也还是extends nil，所以说interface的继承只是compile time的？如果继承只能是object？\
+        // C#里面的interface的继承应该是用InterfaceImpl来表示的
         if (IsTdInterface(dwAttrClass))
         {
             // Interfaces must extend from Object
@@ -2937,8 +2972,8 @@ TypeHandle ClassLoader::CreateTypeHandleForTypeKey(TypeKey* pKey, AllocMemTracke
 
     TypeHandle typeHnd = TypeHandle();
 
-    if (!pKey->IsConstructed())
-    {
+    if (!pKey->IsConstructed()) // 比如Nullable`1也是算not constructed的
+    {   // typeHnd = TypeHandle(pMT)
         typeHnd = CreateTypeHandleForTypeDefThrowing(pKey->GetModule(),
                                                      pKey->GetTypeToken(),
                                                      pKey->GetInstantiation(),
@@ -3036,6 +3071,7 @@ TypeHandle ClassLoader::CreateTypeHandleForTypeKey(TypeKey* pKey, AllocMemTracke
 // tables Types are published before they are fully loaded. In
 // particular, exact parent info (base class and interfaces) is loaded
 // in a later phase
+// 不止TypeDef被publish, MethodDef和FieldDef也被publish
 /*static*/
 TypeHandle ClassLoader::PublishType(TypeKey *pTypeKey, TypeHandle typeHnd)
 {
@@ -3418,9 +3454,10 @@ retry:
 
     // Is it in the hash of classes currently being loaded?
     pLoadingEntry = m_pUnresolvedClassHash->GetValue(pTypeKey);
-    if (pLoadingEntry)
+    // TODO: 这个感觉还是要看看的，包括这个m_pUnresolvedClassHash到底在什么情况下有entry，因为下面似乎有可能load一个level就会remove一次
+    if (pLoadingEntry)  // 这个里面涉及到挺多复杂的并发逻辑，但应该是涉及并行load的情况，所以先不细看并发细节了。
     {
-        pLoadingEntry->AddRef();
+        pLoadingEntry->AddRef();    // 如果只是加Ref就release的话，以为这在减Ref+remove from hash需要在lock里完成
 
         // It is in the hash, which means that another thread is waiting for it (or that we are
         // already loading this class on this thread, which should never happen, since that implies
@@ -3561,7 +3598,7 @@ retry:
 
             // If other threads are waiting for this load, unblock them as soon as possible to prevent deadlocks.
             if (pLoadingEntry->HasWaiters())
-                break;
+                break;  // 在下面有retry logic
         }
 
         _ASSERTE(!typeHnd.IsNull());

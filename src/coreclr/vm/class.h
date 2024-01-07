@@ -2152,7 +2152,7 @@ inline BOOL EEClass::IsInt128OrHasInt128Fields()
 //==========================================================================
 VOID InitPreStubManager();
 
-EXTERN_C void STDCALL ThePreStub();
+EXTERN_C void STDCALL ThePreStub(); // ThePreStubAMD64.asm
 
 inline PCODE GetPreStubEntryPoint()
 {

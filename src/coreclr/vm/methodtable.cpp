@@ -322,6 +322,7 @@ struct MethodTable::MultipurposeSlotOffset
     // where the first fixed slot is not used, but the second one is. The first fixed
     // slot has to be assigned instead of the second one in this case. This assumes that
     // there are exactly two fixed slots.
+    // 就是说在它（现在在处理的这个）前面的只有一个presented，如果这个是第二个fixed(i.e. m_pInterfaceMap)那么它应该放到第一个fixed(i.e. m_pPerInstInfo)
     enum { index = (((mask & 3) == 2) && (raw == 1)) ? 0 : raw }; // NOTE(JJ): see MethodTable::m_pInterfaceMap
 
     // Offset of slot

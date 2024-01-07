@@ -109,7 +109,7 @@ typedef DPTR(struct LookupMapBase) PTR_LookupMapBase;
 
 struct LookupMapBase
 {
-    DPTR(LookupMapBase) pNext;
+    DPTR(LookupMapBase) pNext;  // rid的range中间似乎是不能为空的，pNext表示的范围是相接的
 
     ArrayDPTR(TADDR)    pTable;
 
@@ -145,6 +145,7 @@ struct LookupMapBase
 
 #define NO_MAP_FLAGS ((TADDR)0)
 
+// 就是single linked list of array, array size是2倍递增，每个array表示的RID范围是连续的，[0, L1), [L1, L1+L2)...
 template <typename TYPE>
 struct LookupMap : LookupMapBase
 {
@@ -494,6 +495,7 @@ public:
         return &m_LookupTableCrst;
     }
 
+    // for non-dynamic, per domain
     PTR_LoaderAllocator GetLoaderAllocator()
     {
         LIMITED_METHOD_DAC_CONTRACT;
@@ -1020,6 +1022,7 @@ public:
         return GetMDImport()->GetCustomAttributeByName(parentToken, GetWellKnownAttributeName(attribute), ppData, pcbData);
     }
 
+    // ECMA Metadata
     IMDInternalImport *GetMDImport() const final
     {
         WRAPPER_NO_CONTRACT;

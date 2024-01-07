@@ -2356,7 +2356,7 @@ uintptr_t   process_mask = 0;
 int         gc_heap::n_heaps;       // current number of heaps
 int         gc_heap::n_max_heaps;   // maximum number of heaps
 
-gc_heap**   gc_heap::g_heaps;
+gc_heap**   gc_heap::g_heaps;   // heap index => gc_heap*
 
 #if !defined(USE_REGIONS) || defined(_DEBUG)
 size_t*     gc_heap::g_promoted;
@@ -3564,6 +3564,9 @@ in_range_for_segment(uint8_t* add, heap_segment* seg)
 }
 
 #ifdef FEATURE_BASICFREEZE
+/*
+[sorted_table][bk * (sorted_table.size+1)]
+*/
 // The array we allocate is organized as follows:
 // 0th element is the address of the last array we allocated.
 // starting from the 1st element are the segment addresses, that's
@@ -15036,7 +15039,7 @@ gc_heap::init_gc_heap (int h_number)
 
     uint32_t* ct = &g_gc_card_table [card_word (card_of (g_gc_lowest_address))];
     own_card_table (ct);
-    card_table = translate_card_table (ct);
+    card_table = translate_card_table (ct); // 这些在make_card_table已经算过一遍了，又来一遍？
 
     brick_table = card_table_brick_table (ct);
     highest_address = card_table_highest_address (ct);

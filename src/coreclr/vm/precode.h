@@ -216,7 +216,7 @@ struct FixupPrecodeData
 typedef DPTR(FixupPrecodeData) PTR_FixupPrecodeData;
 
 #if !(defined(TARGET_ARM64) && defined(TARGET_UNIX))
-extern "C" void FixupPrecodeCode();
+extern "C" void FixupPrecodeCode(); // thunktemplates.asm
 extern "C" void FixupPrecodeCode_End();
 #endif
 
@@ -429,6 +429,7 @@ private:
     }
 
 public:
+    // 尝试根据第一个byte判断
     PrecodeType GetType()
     {
         LIMITED_METHOD_CONTRACT;

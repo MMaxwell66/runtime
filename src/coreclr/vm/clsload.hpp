@@ -117,6 +117,8 @@ public:
     }
 };
 
+// 给人的感觉是支持两种不同类型 namespace+name or module+token
+// 还有一种可能形式module+token是为了支持nested的，nested的时候需要先resolve parent到module+token里面去。
 class NameHandle
 {
     friend class ClassLoader;
@@ -477,7 +479,7 @@ void DECLSPEC_NORETURN ThrowTypeAccessException(AccessCheckContext* pContext,
 
 
 //---------------------------------------------------------------------------------------
-//
+// 负责的一些功能包括：负责type name, nested type name这些到module+token之间的映射逻辑。
 class ClassLoader
 {
     friend class PendingTypeLoadEntry;
@@ -493,7 +495,7 @@ class ClassLoader
 
 private:
     // Classes for which load is in progress
-    PendingTypeLoadTable  * m_pUnresolvedClassHash;
+    PendingTypeLoadTable  * m_pUnresolvedClassHash; // Q: 只有完全load才会从这里remove掉吗？ A: 看上去不是应该，而且是似乎是每load一个level就会重新插入一次，load完一个level就remove的样子
     CrstExplicitInit        m_UnresolvedClassLock;
 
     // Protects addition of elements to module's m_pAvailableClasses.
@@ -642,6 +644,7 @@ public:
     // This flag indicates whether we should accept an uninstantiatednaked TypeDef or TypeRef
     // for a generic type definition, where "uninstantiated" means "not used as part of
     // a TypeSpec"
+    // i.e. failed when TypeHandle.IsGenericTypeDefinition
     typedef enum { FailIfUninstDefOrRef, PermitUninstDefOrRef } PermitUninstantiatedFlag;
 
     // This flag indicates whether we want to "load" the type if it isn't already in the

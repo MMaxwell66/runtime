@@ -5,7 +5,7 @@
 //
 
 
-//
+// TODO: collectible LoaderAllocator
 
 //
 // ============================================================================
@@ -2708,7 +2708,8 @@ MethodTableBuilder::EnumerateClassMethods()
     enum { SeenCtor = 1, SeenInvoke = 2, SeenBeginInvoke = 4, SeenEndInvoke = 8};
     unsigned delegateMethodsSeen = 0;
 
-    // 读取每个method的各种属性，并做各种validation，最后填充到m_rgDeclaredMethods里面
+    // 读取每个method的各种属性，并做各种validation，最后填充到m_rgDeclaredMethods里面。
+    // AllocAndInitMethodDescs中依赖于m_rgDeclaredMethods中的token是递增的
     for (i = 0; i < cMethAndGaps; i++)
     {
         ULONG dwMethodRVA;
@@ -4961,7 +4962,7 @@ VOID MethodTableBuilder::TestMethodImpl(
 //*******************************************************************************
 //
 // Used by BuildMethodTable
-// 一些validation加上查找 .ctor 和 .cctor 是否定义
+// 一些validation加上查找 .ctor 和 .cctor 是否定义，放到 bmtVT->pCCtor bmtVT->pDefaultCtor
 VOID
 MethodTableBuilder::ValidateMethods()
 {
@@ -6995,6 +6996,8 @@ VOID MethodTableBuilder::AllocAndInitMethodDescs()
             }
         }
 
+        // SetMethodDescIndex依赖于methodDescCount < 256，但是这里的maxPrecodesPerPage是>=256的。所以是有危险的。
+        // 不过每个size最少有8 bytes，而MaxSizeOfMethdDescs最多256 * 8的，所以每个chunk最多的MethodDesc还是不超过256。
         if (tokenRange != currentTokenRange ||
             sizeOfMethodDescs + size > MethodDescChunk::MaxSizeOfMethodDescs ||
             methodDescCount + currentSlotMethodDescCount > maxPrecodesPerPage)
@@ -12063,7 +12066,7 @@ MethodTableBuilder::GatherGenericsInfo(
         bmtGenericsInfo->pVarianceInfo = new (pStackingAllocator) BYTE[numGenericArgs];
 
         // If it has generic arguments but none have been specified, then load the instantiation at the formals
-        if (inst.IsEmpty())
+        if (inst.IsEmpty())     // 这个似乎是拿这个Open generic type
         {
             bmtGenericsInfo->fTypicalInstantiation = TRUE;
             S_UINT32 scbAllocSize = S_UINT32(numGenericArgs) * S_UINT32(sizeof(TypeHandle));
@@ -12121,7 +12124,7 @@ MethodTableBuilder::GatherGenericsInfo(
                     {
                         // Do NOT use the alloc tracker for this memory as we need it stay allocated even if the load fails.
                         void* mem = (void*)pModule->GetLoaderAllocator()->GetLowFrequencyHeap()->AllocMem(S_SIZE_T(sizeof(TypeVarTypeDesc)));
-                        pTypeVarTypeDesc = new (mem) TypeVarTypeDesc(pModule, cl, i, tkTyPar);
+                        pTypeVarTypeDesc = new (mem) TypeVarTypeDesc(pModule, cl, i, tkTyPar);  // 这个的作用是什么？
 
                         pModule->StoreGenericParamThrowing(tkTyPar, pTypeVarTypeDesc);
                     }
@@ -12145,7 +12148,7 @@ MethodTableBuilder::GatherGenericsInfo(
         }
 
         if (!fHasVariance)
-            bmtGenericsInfo->pVarianceInfo = NULL;
+            bmtGenericsInfo->pVarianceInfo = NULL;  // stacking allocator支持这样直接释放？还是觉得没必要释放？
     }
     else
     {
@@ -12315,7 +12318,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
             cl,
             inst,
             Instantiation());
-        pLoaderModule->GetLoaderAllocator()->EnsureInstantiation(pModule, inst);
+        pLoaderModule->GetLoaderAllocator()->EnsureInstantiation(pModule, inst);    // for no collectible no-op
     }
 
     LoaderAllocator * pAllocator = pLoaderModule->GetLoaderAllocator();
@@ -12341,7 +12344,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
         }
 
         DWORD dwTotalDicts = genericsInfo.numDicts + pParentMethodTable->GetNumDicts();
-        if (!FitsIn<WORD>(dwTotalDicts))
+        if (!FitsIn<WORD>(dwTotalDicts))    // 所以一个class中的type的各种使用还不能超过16bit了。
         {
             pAssembly->ThrowTypeLoadException(pInternalImport, cl, IDS_CLASSLOAD_TOOMANYGENERICARGS);
         }

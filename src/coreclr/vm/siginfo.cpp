@@ -995,7 +995,7 @@ static uint32_t NormalizeFnPtrCallingConvention(uint32_t callConv)
 
 // Method: TypeHandle SigPointer::GetTypeHandleThrowing()
 // pZapSigContext is only set when decoding zapsigs
-//
+// TODO: ZapSig
 TypeHandle SigPointer::GetTypeHandleThrowing(
                  ModuleBase *                pModule,
                  const SigTypeContext *      pTypeContext,
@@ -1337,6 +1337,8 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                 pGenericTypeModule = static_cast<Module*>(pModule);
             }
 
+            // ECMA 23.2.14
+            // load the TypeDefOrRefOrSpecEncoded in sig
             TypeHandle genericType = psig.GetGenericInstType(pModule, fLoadTypes, level < CLASS_LOAD_APPROXPARENTS ? level : CLASS_LOAD_APPROXPARENTS, pZapSigContext);
 
             if (genericType.IsNull())
@@ -1424,6 +1426,7 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
                                 checkTokenForRecursion = true;
                             }
 
+                            // TODO
                             if (checkTokenForRecursion)
                             {
                                 mdToken valueTypeToken = mdTypeDefNil;

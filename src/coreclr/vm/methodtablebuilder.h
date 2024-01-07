@@ -32,10 +32,11 @@ public:
     struct bmtGenericsInfo
     {
         SigTypeContext typeContext;     // Type context used for metadata parsing
+        // 请参考“Design and Implementation of Generics for the .NET Common Language Runtime”，基本上就是说这个T在各个地方（field，method之类的）可能的使用情况。比如说 T, List<T>, Dictionary<T, List<T>> ... 然后是在处理过程中动态生成的，所以初始化为1对于Generic type.
         WORD numDicts;                  // Number of dictionaries including this class
         BYTE *pVarianceInfo;            // Variance annotations on type parameters, NULL if none specified
         BOOL fTypicalInstantiation;     // TRUE if this is generic type definition
-        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations
+        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations // see IsCanonicalSubtype comments
         BOOL fContainsGenericVariables; // TRUE if this is an open type
 
         inline bmtGenericsInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
@@ -1306,6 +1307,7 @@ private:
 
     // --------------------------------------------------------------------------------------------
     // Holds an array of bmtMethodSlot values.
+    // m_curSlotIdx个已经分配的slot，array of m_maxSlotIdx的bmtMethodSlot
     class bmtMethodSlotTable
     {
       public:

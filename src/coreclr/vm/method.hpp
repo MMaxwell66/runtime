@@ -2119,6 +2119,13 @@ public:
 // compression.  Basically fields that are common among methods descs in the chunk are stored in the chunk
 // and the MethodDescs themselves just store and index that allows them to find their Chunk.  Semantically
 // a code:MethodDescChunk is just a set of code:MethodDesc.
+/*
++0x000 m_methodTable    : Ptr64 MethodTable
++0x008 m_next           : Ptr64 MethodDescChunk
++0x010 m_size           : UChar
++0x011 m_count          : UChar
++0x012 m_flagsAndTokenRange : Uint2B
+*/
 class MethodDescChunk
 {
     friend class MethodDesc;

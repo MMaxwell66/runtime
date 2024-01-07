@@ -1938,6 +1938,7 @@ HRESULT GetFileVersion(                     // S_OK or error
 
 Volatile<double> NormalizedTimer::s_frequency = -1.0;
 
+// copy code(size is codeSize) to pageBase
 void FillStubCodePage(BYTE* pageBase, const void* code, SIZE_T codeSize, SIZE_T pageSize)
 {
     SIZE_T totalCodeSize = (pageSize / codeSize) * codeSize;

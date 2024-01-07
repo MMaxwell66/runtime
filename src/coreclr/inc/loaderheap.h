@@ -209,7 +209,7 @@ public:
     {
         Data,
         Executable,
-        Interleaved
+        Interleaved // 一个 executable, 一个 data. 每个GetStubCodePageSize(), 16k in x64
     };
 
 private:
@@ -234,7 +234,7 @@ private:
     DWORD               m_dwGranularity;
 
     // Range list to record memory ranges in
-    RangeList *         m_pRangeList;
+    RangeList *         m_pRangeList;       // 这个的作用是什么？感觉上去是把自己分配的地址空间标记起来，然后这个RangeList实例是在ctor的时候外面传进来的
 
     size_t              m_dwTotalAlloc;
 
@@ -288,7 +288,7 @@ public:
 
 public:
     BOOL                m_fExplicitControl;  // Am I a LoaderHeap or an ExplicitControlLoaderHeap?
-    void                (*m_codePageGenerator)(BYTE* pageBase, BYTE* pageBaseRX, SIZE_T size);
+    void                (*m_codePageGenerator)(BYTE* pageBase, BYTE* pageBaseRX, SIZE_T size);  // 这个是Interleaved在commit新空间的时候对于前判断executable的初始化
 
 #ifdef DACCESS_COMPILE
 public:

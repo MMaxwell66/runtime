@@ -1436,7 +1436,7 @@ void *UnlockedLoaderHeap::UnlockedAllocMem_NoThrow(size_t dwSize
 
 #ifdef RANDOMIZE_ALLOC
     if (!m_fExplicitControl && !IsInterleaved())
-        dwSize += s_random.Next() % 256;
+        dwSize += s_random.Next() % 256;                // 这个其实感觉有一点风险，毕竟这个初始化过程中的配其实有点可预测，这个random看上去就很弱的样子，有风险可能根据初始化的一些type算出seed。
 #endif
 
     dwSize = AllocMem_TotalSize(dwSize);

@@ -80,6 +80,7 @@ PTR_MethodTable CoreLibBinder::LookupClassLocal(BinderClassID id)
         nameHandle.SetName(nameSpace, splitName.GetUTF8());
 
         // The side-effect of updating the scope in the NameHandle is the point of the call.
+        // 这个应该是拿到encloser在class loader的hash table中的bucket，然后应该nested的name重复问题，用这个bucket来判断entry的parent是不是我们的这个，见`ClassLoader::GetClassValue` switch default.
         (void)ClassLoader::LoadTypeByNameThrowing(GetModule()->GetAssembly(), &nameHandle);
 
         // Now load the nested type.

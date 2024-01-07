@@ -1899,6 +1899,7 @@ HRESULT ReadyToRun_TypeGenericInfoMap::IsGenericNoThrow(mdTypeDef input, bool *p
     return S_OK;
 }
 
+// for normal, GenericParam Owner
 uint32_t ReadyToRun_TypeGenericInfoMap::GetGenericArgumentCount(mdTypeDef input, IMDInternalImport* pImport) const
 {
     bool foundResult;

@@ -1045,6 +1045,8 @@ FORCEINLINE TADDR MethodTable::GetMultipurposeSlotPtr(WFLAGS2_ENUM flag, const B
 
     _ASSERTE(GetFlag(flag));
 
+    // flag - 1的逻辑是这样的：我们对应的是flag，那么我们决定我们位置的就是说前面有几个presented?
+    // flag - 1就是前面所有的slot的mask 0b111... 所以GetFlag拿到的就是前面几个的flag，根据bit pop就可以得到前面presented的个数。而这个array就是compile time算好的offset
     DWORD offset = offsets[GetFlag((WFLAGS2_ENUM)(flag - 1))];
 
     if (offset >= sizeof(MethodTable)) {
