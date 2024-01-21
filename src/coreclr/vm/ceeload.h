@@ -751,7 +751,7 @@ private:
     // For generic types, IsGenericTypeDefinition() is true i.e. instantiation at formals
     LookupMap<PTR_MethodTable>      m_TypeDefToMethodTableMap;
 
-    // Linear mapping from MethodDef token to MethodDesc *
+    // Linear mapping from MethodDef token to MethodDesc *, (MethodDesc is part of a MethodDescChunk of a EEClass)
     // For generic methods, IsGenericTypeDefinition() is true i.e. instantiation at formals
     LookupMap<PTR_MethodDesc>       m_MethodDefToDescMap;
 

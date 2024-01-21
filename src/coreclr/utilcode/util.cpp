@@ -1809,6 +1809,8 @@ ErrExit:
 // This function validates the given Method/Field/Standalone signature.
 //@todo GENERICS: MethodInstantiation?
 //*****************************************************************************
+// II.23.2.1
+//   HASTHIS, EXPLICITTHIS, DEFAULT/VARARG/GENERIC ORed in the same byte
 HRESULT validateTokenSig(
     mdToken             tk,                     // [IN] Token whose signature needs to be validated.
     PCCOR_SIGNATURE     pbSig,                  // [IN] Signature.

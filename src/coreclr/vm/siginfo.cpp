@@ -998,7 +998,7 @@ static uint32_t NormalizeFnPtrCallingConvention(uint32_t callConv)
 // TODO: ZapSig
 TypeHandle SigPointer::GetTypeHandleThrowing(
                  ModuleBase *                pModule,
-                 const SigTypeContext *      pTypeContext,
+                 const SigTypeContext *      pTypeContext,      // 这个应该是说当前scope里面的type parameter，比如说在一个generic class里面就是type parameters
                  ClassLoader::LoadTypesFlag  fLoadTypes/*=LoadTypes*/,
                  ClassLoadLevel              level/*=CLASS_LOADED*/,
                  BOOL                        dropGenericArgumentLevel/*=FALSE*/,
@@ -1339,6 +1339,7 @@ TypeHandle SigPointer::GetTypeHandleThrowing(
 
             // ECMA 23.2.14
             // load the TypeDefOrRefOrSpecEncoded in sig
+            // 只是LoadTypeDefOrRefThrowing+一些ZapSig之类的logic
             TypeHandle genericType = psig.GetGenericInstType(pModule, fLoadTypes, level < CLASS_LOAD_APPROXPARENTS ? level : CLASS_LOAD_APPROXPARENTS, pZapSigContext);
 
             if (genericType.IsNull())
@@ -2018,6 +2019,7 @@ TypeHandle SigPointer::GetTypeVariable(CorElementType et,
         TypeHandle thNull;
         RETURN(thNull);
     }
+    // TypeVarTypeDesc
     if (et == ELEMENT_TYPE_VAR)
     {
         RETURN(pTypeContext->m_classInst[index]);
@@ -4211,6 +4213,12 @@ MetaSig::CompareTypeDefsUnderSubstitutions(
     CompareState state{ &visited };
     for (DWORD i = 0; i < pTypeDef1->GetNumGenericArgs(); i++)
     {
+        /*
+        class C<U, V> : D<V>, I<U> {}
+        class D<U> : I<U> {}
+        sig1: I`1[C{T0}]
+        sig2: I`1[D{T0}] apply (D`1[C{T1}]) => I`1[C{T1}]
+        */
         PCCOR_SIGNATURE startInst1 = inst1.GetPtr();
         IfFailThrow(inst1.SkipExactlyOne());
         PCCOR_SIGNATURE endInst1ptr = inst1.GetPtr();
@@ -5406,7 +5414,7 @@ Substitution::Substitution(
     if (FAILED(sigptr.GetElemType(&type)))
         return;
 
-    if (type != ELEMENT_TYPE_CLASS)
+    if (type != ELEMENT_TYPE_CLASS) // valuetype不需要这个嘛？
         return;
 
     /* mdToken genericTok = */

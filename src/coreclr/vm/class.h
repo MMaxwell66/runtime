@@ -1717,7 +1717,7 @@ public:
         VMFLAG_HASLAYOUT                       = 0x00000040,
         VMFLAG_ISNESTED                        = 0x00000080,
 
-        VMFLAG_IS_EQUIVALENT_TYPE              = 0x00000200,
+        VMFLAG_IS_EQUIVALENT_TYPE              = 0x00000200,    // seems to relate to COM equivalent
 
         //   OVERLAID is used to detect whether Equals can safely optimize to a bit-compare across the structure.
         VMFLAG_HASOVERLAIDFIELDS               = 0x00000400,
@@ -1793,7 +1793,7 @@ private:
     // TODO: Remove this field. It is only used by SOS and object validation for stress.
     PTR_MethodTable m_pMethodTable;
 
-    PTR_FieldDesc m_pFieldDescList;
+    PTR_FieldDesc m_pFieldDescList; // allocate in AllocateFieldDescs
     PTR_MethodDescChunk m_pChunks;
 
 #ifdef FEATURE_COMINTEROP

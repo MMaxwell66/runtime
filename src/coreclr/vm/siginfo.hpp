@@ -381,8 +381,8 @@ class Substitution
 {
 private:
     ModuleBase *         m_pModule; // Module in which instantiation lives (needed to resolve typerefs)
-    SigPointer           m_sigInst;
-    const Substitution * m_pNext;
+    SigPointer           m_sigInst; // may point to TypeSpec, 位置在ntypars之后的样子，对于valuetype好像是空
+    const Substitution * m_pNext;   // 指向子类
 
 public:
     Substitution()

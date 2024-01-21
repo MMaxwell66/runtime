@@ -44,6 +44,7 @@ FORCEINLINE PTR_EEClass MethodTable::GetClassWithPossibleAV()
 }
 
 //==========================================================================================
+// ->m_pEEClass or ->m_pCanonMT->m_pEEClass
 FORCEINLINE PTR_EEClass MethodTable::GetClass()
 {
     LIMITED_METHOD_DAC_CONTRACT;

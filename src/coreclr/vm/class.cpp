@@ -851,6 +851,7 @@ HRESULT EEClass::AddMethodDesc(
 // in accordance with their variance annotations
 // The signature is assumed to be well-formed but indices and arities might not be correct
 //
+// generic是token本身的generic, psig是toke实现的interface的，里面的type parameter就是token的
 BOOL
 EEClass::CheckVarianceInSig(
     DWORD               numGenericArgs,
@@ -979,8 +980,13 @@ EEClass::CheckVarianceInSig(
                         }
                         CorGenericParamAttr genPosition = (CorGenericParamAttr) (flags & gpVarianceMask);
                         // If the surrounding context is contravariant then we need to flip the variance of this parameter
+                        // 这个revert应该是检查的最不直观的部分，虽然通过示例验证了算法逻辑，但它的直观意义还是不明了。
                         if (position == gpContravariant)
                         {
+                            // 这么来考虑，在gpContravariant情况下，我们运行时 cast 到 T', 要求 T : T'
+                            // cast之后传入给我们的参数 arg 是一个 I<U'>
+                            // 如果 I<T> 是逆变的，则我们使用 arg.func(U') 而这个 U' 在执行的时候是一个 U, 真正的代码应该是 arg.func((U')U), 我们传入的U要能够被func接受，就要求 U : U'，即要求T协变
+                            // 如果 I<T> 是协变的，则我们使用 U' x = arg.func()，而我们执行的代码是这样 (U) x = arg.func()，func的返回则要能够当作一个U来使用，所以要求 U' : U，即要求T逆变
                             genPosition = genPosition == gpCovariant ? gpContravariant
                                         : genPosition == gpContravariant ? gpCovariant
                                         : gpNonVariant;

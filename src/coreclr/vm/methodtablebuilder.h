@@ -31,13 +31,14 @@ public:
     // See code:ClassLoader.CreateTypeHandleForTypeDefThrowing
     struct bmtGenericsInfo
     {
+        // 包括这个type的type parameters, method的method parameters, 像是ELEMENT_TYPE_VAR这种，在这里以TypeVarTypeDesc的形式表示
         SigTypeContext typeContext;     // Type context used for metadata parsing
         // 请参考“Design and Implementation of Generics for the .NET Common Language Runtime”，基本上就是说这个T在各个地方（field，method之类的）可能的使用情况。比如说 T, List<T>, Dictionary<T, List<T>> ... 然后是在处理过程中动态生成的，所以初始化为1对于Generic type.
         WORD numDicts;                  // Number of dictionaries including this class
-        BYTE *pVarianceInfo;            // Variance annotations on type parameters, NULL if none specified
-        BOOL fTypicalInstantiation;     // TRUE if this is generic type definition
-        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations // see IsCanonicalSubtype comments
-        BOOL fContainsGenericVariables; // TRUE if this is an open type
+        BYTE *pVarianceInfo;            // Variance annotations on type parameters, NULL if none specified  // 协变、逆变, from GenericParam's flag
+        BOOL fTypicalInstantiation;     // TRUE if this is generic type definition  // 感觉就是说是不是 List<> 这种没有提供具体的type
+        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations // see IsCanonicalSubtype comments，应该是说Generic的任意部分涉及到<__Canon>
+        BOOL fContainsGenericVariables; // TRUE if this is an open type // 嗯，和fTypicalInstantiation的区别的是什么？
 
         inline bmtGenericsInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
         inline DWORD GetNumGenericArgs() const { LIMITED_METHOD_CONTRACT; return typeContext.m_classInst.GetNumArgs(); }
@@ -350,8 +351,8 @@ private:
 
     private:
         //-----------------------------------------------------------------------------------------
-        Substitution    m_subst;
-        MethodTable *   m_pMT;
+        Substitution    m_subst;    // 如果extends的是一个Generic，这个包括了对应的TypeSpec
+        MethodTable *   m_pMT;      // GetCanonicalMethodTable
         bmtRTType *     m_pParent;
     };  // class bmtRTType
 
@@ -458,6 +459,9 @@ private:
     // Currently, it knows the difference between a bmtRTType and a bmtMDType and will
     // forward method calls such as GetModule, GetParentType and more to the appropriate
     // target.
+    // bmtRTType, bmtMDType的区别是什么：
+    // 1. BuildMethodTableThrowing中创建的是bmtMDType // Copilot补充的注释，感觉有可能：“这个是从metadata中读取的，所以是bmtMDType”
+    // 2. 但是bmtMDType的parent是用bmtRTType表示的
     class bmtTypeHandle
     {
     public:
@@ -1024,6 +1028,7 @@ private:
         DWORD             m_dwDeclAttrs;
         DWORD             m_dwImplAttrs;
         DWORD             m_dwRVA;
+        // calc in EnumerateClassMethods based on things like attribute, "Determine the method's type"
         MethodClassification  m_type;               // Specific MethodDesc flavour
         METHOD_IMPL_TYPE  m_implType;           // Whether or not the method is a methodImpl body
         MethodSignature   m_methodSig;
@@ -1276,7 +1281,7 @@ private:
     // --------------------------------------------------------------------------------------------
     struct bmtProperties
     {
-        bool fIsValueClass;
+        bool fIsValueClass;                     // valuetype or enum
         bool fIsEnum;
         bool fNoSanityChecks;
         bool fSparse;                           // Set to true if a sparse interface is being used.
@@ -1296,8 +1301,8 @@ private:
         bool fDynamicStatics;                   // Set to true if the statics will be allocated in the dynamic
         bool fGenericsStatics;                  // Set to true if the there are per-instantiation statics
 
-        bool fIsIntrinsicType;                  // Set to true if the type has an [Intrinsic] attribute on it
-        bool fIsHardwareIntrinsic;              // Set to true if the class is a hardware intrinsic
+        bool fIsIntrinsicType;                  // Set to true if the type has an [Intrinsic] attribute on it, only allowed in System module
+        bool fIsHardwareIntrinsic;              // Set to true if the class is a hardware intrinsic, namespace: System.Runtime.Intrinsics.X86
 
         DWORD dwNonGCRegularStaticFieldBytes;
         DWORD dwNonGCThreadStaticFieldBytes;
@@ -1393,9 +1398,22 @@ private:
         //-----------------------------------------------------------------------------------------
         // Implemented using a bmtMethodSlotTable
         // new @ AllocateWorkingSlotTables
+        // 1. #GetParentMethodTable()->GetNumVirtuals(), (CopyParentVtable)
+        //    根据name和sig会被这个class的MethodDef覆盖。
+        //    ++cVirtualSlots
+        // 2. Virtual method defined in MethodDef, (PlaceVirtualMethods)
+        //    AddVirtualMethod
+        //    ++cVirtualSlots
+        // <- cVirtualSlots
+        // 3. AddNonVirtualMethod (PlaceNonVirtualMethods)
+        //    .cctor, .ctor
+        // <- cVtableSlots
+        // 4. AddUnboxedMethod (AllocAndInitMethodDescs > AllocAndInitMethodDescChunk)
+        // <- cTotalSlots
         bmtMethodSlotTable * pSlotTable;
 
         // Used to keep track of the default and static type constructors.
+        // init in ValidateMethods
         bmtMDMethod * pDefaultCtor;
         bmtMDMethod * pCCtor;
 
@@ -1408,6 +1426,7 @@ private:
 
         // Number of slots allocated in Vtable
         SLOT_INDEX cVtableSlots;
+        // DWORD dwNonVirtualSlots = cVtableSlots - cVirtualSlots;
 
         // The dispatch map builder for this type.
         //@TODO: This should be moved.
@@ -1538,6 +1557,8 @@ private:
     // --------------------------------------------------------------------------------------------
     struct bmtParentInfo
     {
+        // method in parent, init in ImportParentMethods, size(GetParentMethodTable()->GetNumMethods())
+        // 似乎virtual在前面
         bmtMethodSlotTable *pSlotTable;
 
         typedef bmtMethodSlotTable::Iterator Iterator;
@@ -1554,7 +1575,7 @@ private:
             { WRAPPER_NO_CONTRACT; return (*pSlotTable)[idx]; }
 
         DWORD NumParentPointerSeries;
-        MethodNameHash *pParentMethodHash;
+        MethodNameHash *pParentMethodHash;  // method name -> bmtRTMethod
 
         inline bmtParentInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
     };  // struct bmtParentInfo
@@ -1577,11 +1598,12 @@ private:
     // The ECMA spec declares that interfaces get placed differently depending on how they
     // are declared (see comment before the implementation of PlaceInterfaceMethods for details).
     // This is used to keep track of the declaration conditions as interfaces are expanded.
+    // 看英文注释，感觉上是根据interface定义的位置不同，cast的一些差异导致我们需要在build interface map的过程中去记录这些东西
     struct InterfaceDeclarationScope
     {
         //-----------------------------------------------------------------------------------------
         // States that the interface has been declared by a parent.
-        bool fIsInterfaceDeclaredOnParent;
+        bool fIsInterfaceDeclaredOnParent;  // direct parent?
 
         //-----------------------------------------------------------------------------------------
         // States that the interface has been explicitly declared in the interface implementation
@@ -1592,6 +1614,7 @@ private:
         // parent and was not explicitly declared in the interface implementation list, but it
         // was declared transitively through one of the interfaces appearing in the implementation
         // list.
+        // 应该是说 class C : I1, interface I1 : I2, 这种情况下，I2就是both false
 
         //-----------------------------------------------------------------------------------------
         InterfaceDeclarationScope(
@@ -1806,7 +1829,10 @@ private:
             StackingAllocator * pStackingAllocator);
 
         //-----------------------------------------------------------------------------------------
-        bmtRTType *               m_pType;
+        bmtRTType *               m_pType; // interface type
+        // 1. interface GetNumVirtuals() = m_cImplTable
+        // 2. VirtualStatic = m_cImplTableStatics
+        // 猜测是这个interface要求的实现
         bmtInterfaceSlotImpl *    m_pImplTable;
         SLOT_INDEX                m_cImplTable;
         SLOT_INDEX                m_cImplTableStatics;
@@ -1820,7 +1846,7 @@ private:
     struct bmtInterfaceInfo
     {
         bmtInterfaceEntry * pInterfaceMap;
-        DWORD dwInterfaceMapSize;               // count of entries in interface map
+        DWORD dwInterfaceMapSize;               // count of entries in interface map, # of interface, 去除了那些相继承链上相同的interface
         DWORD dwInterfaceMapAllocated;          // upper bound on size of interface map
 #ifdef _DEBUG
         // Should we inject interface duplicates for this type? (Parent has its own value stored in
@@ -1846,7 +1872,7 @@ private:
     struct bmtEnumFieldInfo
     {
         // Counts instance fields
-        DWORD dwNumInstanceFields;
+        DWORD dwNumInstanceFields;  // not literal, not static
 
         // Counts both regular statics and thread statics. Currently RVA
         // get lumped in with "regular statics".
@@ -1855,10 +1881,11 @@ private:
         DWORD dwNumStaticBoxedFields;
 
         // We keep a separate count for just thread statics
-        DWORD dwNumThreadStaticFields;
+        DWORD dwNumThreadStaticFields;      // System.ThreadStaticAttribute + static field
         DWORD dwNumThreadStaticObjRefFields;
         DWORD dwNumThreadStaticBoxedFields;
 
+        // dwNumStaticFields + dwNumInstanceFields
         DWORD dwNumDeclaredFields;           // For calculating amount of FieldDesc's to allocate
 
         IMDInternalImport *m_pInternalImport;
@@ -1878,8 +1905,9 @@ private:
     {
         //-----------------------------------------------------------------------------------------
         // The array and bounds of the bmtMDMethod array
-        SLOT_INDEX      m_cDeclaredMethods;
-        SLOT_INDEX      m_cMaxDeclaredMethods;
+        // init in EnumerateClassMethods, from MethodDef
+        SLOT_INDEX      m_cDeclaredMethods;     // inc in AddDeclaredMethod, not include _VtblGap
+        SLOT_INDEX      m_cMaxDeclaredMethods;  // count from Metadata Method Table
         bmtMDMethod **  m_rgDeclaredMethods;
 
         //-----------------------------------------------------------------------------------------
@@ -1941,6 +1969,7 @@ private:
     struct bmtMetaDataInfo
     {
         //-----------------------------------------------------------------------------------------
+        // init in EnumerateClassFields
         DWORD    cFields;                   // # meta-data fields of this class
         mdToken *pFields;                   // Enumeration of metadata fields
         DWORD   *pFieldAttrs;               // Enumeration of the attributes of the fields
@@ -1958,12 +1987,15 @@ private:
             // This is to detect situations where a methodimpl does not match any method on any equivalent interface.
             bool    fThrowIfUnmatchedDuringInexactMethodImplProcessing;
             UINT32  interfaceEquivalenceSet;// Equivalence set in the interface map to examine
-            bool    fRequiresCovariantReturnTypeChecking;
+            bool    fRequiresCovariantReturnTypeChecking;   // declare和body的sig除了return都match，要看是不是允许协变
             static int __cdecl Compare(const void *elem1, const void *elem2);
             static BOOL Equal(const MethodImplTokenPair *elem1, const MethodImplTokenPair *elem2);
         };
 
         //-----------------------------------------------------------------------------------------
+        // init in EnumerateMethodImpls
+        // from MethodImpl
+        // sort by methodBody then methodDecl, duplicate removed
         MethodImplTokenPair *rgMethodImplTokens;
         Substitution *pMethodDeclSubsts;    // Used to interpret generic variables in the interface of the declaring type
 
@@ -2244,6 +2276,7 @@ private:
     // Created to help centralize knowledge of where all the information about each method is
     // stored. Eventually, this can hopefully be removed and it should be sufficient to iterate
     // over the array of bmtMDMethod* that hold all the declared methods.
+    // **MethodDef**
     class DeclaredMethodIterator
     {
       private:

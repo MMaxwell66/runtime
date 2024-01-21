@@ -6,6 +6,9 @@
 
 
 // TODO: collectible LoaderAllocator
+// - NumGCPointerSeries
+// - IsValueClass
+// - IsInterface
 
 //
 // ============================================================================
@@ -319,7 +322,7 @@ MethodTableBuilder::LoaderFindMethodInParentClass(
 void
 MethodTableBuilder::ExpandApproxInterface(
     bmtInterfaceInfo *          bmtInterface,  // out parameter, various parts cumulatively written to.
-    const Substitution *        pNewInterfaceSubstChain,
+    const Substitution *        pNewInterfaceSubstChain,    // tok is interface, next is the type implement the interface
     MethodTable *               pNewInterface,
     InterfaceDeclarationScope   declScope
     COMMA_INDEBUG(MethodTable * dbg_pClassMT))
@@ -350,6 +353,10 @@ MethodTableBuilder::ExpandApproxInterface(
 
         // Type Equivalence is not respected for this comparison as you can have multiple type equivalent interfaces on a class
         TokenPairList newVisited = TokenPairList::AdjustForTypeEquivalenceForbiddenScope(NULL);
+        /*
+        class A<U,V> : I1<U>, I2<U, V> {}
+        class I2<U, V>: I2<U> {}
+        */
         if (MetaSig::CompareTypeDefsUnderSubstitutions(pItfType->GetMethodTable(),
                                                        pNewInterface,
                                                        &pItfType->GetSubstitution(),
@@ -428,6 +435,7 @@ MethodTableBuilder::ExpandApproxInterface(
         // Make sure to pass in the substitution from the new itf type created above as
         // these methods assume that substitutions are allocated in the stacking heap,
         // not the stack.
+        // interface 实现的 interface，看说法是compile可以直接把这个处理掉了，但是不一定？
         InterfaceDeclarationScope declaredItfScope(declScope.fIsInterfaceDeclaredOnParent, false);
         ExpandApproxDeclaredInterfaces(
             bmtInterface,
@@ -441,6 +449,7 @@ MethodTableBuilder::ExpandApproxInterface(
 // Arguments:
 //   dbg_pClassMT - Class on which the interfaces are declared (either explicitly or implicitly).
 //                  It will never be an interface. It may be NULL (if it is the type being built).
+// 处理直接定义在thType对应的TypeDef上的接口
 void
 MethodTableBuilder::ExpandApproxDeclaredInterfaces(
     bmtInterfaceInfo *          bmtInterface,  // out parameter, various parts cumulatively written to.
@@ -507,7 +516,7 @@ MethodTableBuilder::ExpandApproxInheritedInterfaces(
 
     // Backup parent substitution
     Substitution parentSubstitution = pParentType->GetSubstitution();
-    // Make parent an open type
+    // Make parent an open type // for which line of code is this comment?
     pParentType->SetSubstitution(Substitution());
 
     if (pParentOfParent != NULL)
@@ -765,6 +774,7 @@ void MethodTableBuilder::SetBMTData(
 //*******************************************************************************
 // Used by MethodTableBuilder
 
+// TODO
 MethodTableBuilder::bmtRTType *
 MethodTableBuilder::CreateTypeChain(
     MethodTable *        pMT,
@@ -1243,15 +1253,15 @@ MethodTableBuilder::bmtInterfaceEntry::CreateSlotTable(
 //
 MethodTable *
 MethodTableBuilder::BuildMethodTableThrowing(
-    LoaderAllocator *          pAllocator,
+    LoaderAllocator *          pAllocator,              // pLoaderModule->GetLoaderAllocator()
     Module *                   pLoaderModule,
     Module *                   pModule,
-    mdToken                    cl,
-    BuildingInterfaceInfo_t *  pBuildingInterfaceList,
+    mdToken                    cl,                      // belongs to pModule
+    BuildingInterfaceInfo_t *  pBuildingInterfaceList,  // array of MethodTable of InterfaceImpl
     const LayoutRawFieldInfo * pLayoutRawFieldInfos,
     MethodTable *              pParentMethodTable,
     const bmtGenericsInfo *    bmtGenericsInfo,
-    SigPointer                 parentInst,
+    SigPointer                 parentInst,              // 如果extends TypeRef，这个是TypeRef的内容
     WORD                       cBuildingInterfaceList)
 {
     CONTRACTL
@@ -1605,6 +1615,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
     AllocateWorkingSlotTables();
 
     // Allocate a MethodDesc* for each method (needed later when doing interfaces), and a FieldDesc* for each field
+    // 好像只处理了field，但是为什么上面的comment说了MethodDesc，过期的comment吗？
     AllocateFieldDescs();
 
     // Copy the parent's vtable into the current type's vtable
@@ -2348,8 +2359,9 @@ MethodTableBuilder::EnumerateMethodImpls()
             // IMPLEMENTATION LIMITATION: currently, we require that the body of a methodImpl
             // belong to the current type. This is because we need to allocate a different
             // type of MethodDesc for bodies that are part of methodImpls.
-            if (TypeFromToken(theBody) != mdtMethodDef)
+            if (TypeFromToken(theBody) != mdtMethodDef) // 什么合理的情况这个会不是MethodDef?
             {
+                // MethodImpl就是override method的样子。不太对，好像又是interface实现？
                 hr = FindMethodDeclarationForMethodImpl(
                     theBody,
                     &theBody,
@@ -3382,7 +3394,7 @@ MethodTableBuilder::EnumerateClassMethods()
 // # static fields
 // # static fields that contain object refs.
 // # instance fields
-//
+//  简单的field metadata flag检查。想上面注释里面说的第二点，好像没在这里统计？
 VOID
 MethodTableBuilder::EnumerateClassFields()
 {
@@ -3467,7 +3479,7 @@ MethodTableBuilder::EnumerateClassFields()
 
         if (IsFdStatic(dwMemberAttrs))
         {
-            if (!IsFdLiteral(dwMemberAttrs))
+            if (!IsFdLiteral(dwMemberAttrs))    // literal不是在生成il的时候就处理掉的吗？还是说处理更多的可能性？
             {
 #ifdef FEATURE_TYPEEQUIVALENCE
                 if (bmtProp->fIsTypeEquivalent)
@@ -3556,6 +3568,8 @@ VOID    MethodTableBuilder::AllocateWorkingSlotTables()
     // Create a temporary function table (we don't know how large the vtable will be until the very end,
     // since we don't yet know how many declared methods are overrides vs. newslots).
 
+    // TODO: value class
+    // dwMaxVtableSize seems to be m_cDeclaredMethods before this point
     if (IsValueClass())
     {   // ValueClass virtuals are converted into non-virtual methods and the virtual slots
         // become unboxing stubs that forward to these new non-virtual methods. This has the
@@ -3570,6 +3584,7 @@ VOID    MethodTableBuilder::AllocateWorkingSlotTables()
         bmtVT->dwMaxVtableSize += bmtParent->pSlotTable->GetSlotCount();
     }
 
+    // dwMaxVtableSize已经递增过了在EnumerateClassMethods中，为什么还要加一次？
     S_SLOT_INDEX cMaxSlots = AsClrSafeInt(bmtVT->dwMaxVtableSize) + AsClrSafeInt(NumDeclaredMethods());
 
     if (cMaxSlots.IsOverflow() || MAX_SLOT_INDEX < cMaxSlots.Value())
@@ -4710,6 +4725,7 @@ bool MethodTableBuilder::IsBaseTypeAlsoEnclosingType(
 }
 
 //*******************************************************************************
+// MethodAttribute Strict
 BOOL MethodTableBuilder::TestOverrideForAccessibility(
     bmtMethodHandle hParentMethod,
     bmtTypeHandle   hChildType)
@@ -4724,6 +4740,7 @@ BOOL MethodTableBuilder::TestOverrideForAccessibility(
     Assembly * pParentAssembly = pParentModule->GetAssembly();
     Assembly * pChildAssembly = pChildModule->GetAssembly();
 
+    // 这个在AssemblyLoadContext下面会是什么样的表现？
     BOOL isSameAssembly = (pChildAssembly == pParentAssembly);
 
     DWORD dwParentAttrs = hParentMethod.GetDeclAttrs();
@@ -4794,7 +4811,7 @@ VOID MethodTableBuilder::TestOverRide(bmtMethodHandle hParentMethod,
 
     //
     // Refer to Partition II, 9.3.3 for more information on what is permitted.
-    //
+    // 9.3.3 在ECMA 335中没找到，不知这些对应的是什么情况，待确认。
 
     enum WIDENING_STATUS
     {
@@ -5422,6 +5439,7 @@ MethodTableBuilder::PlaceVirtualMethods()
 
         // Hash that a method with this name exists in this class
         // Note that ctors and static ctors are not added to the table
+        // 这个好像是用去比较generic里面的subst是否一致？
         BOOL fMethodConstraintsMatch = FALSE;
 
         // If the member is marked with a new slot we do not need to find it in the parent
@@ -7528,7 +7546,8 @@ MethodTableBuilder::PlaceMethodFromParentEquivalentInterfaceIntoInterfaceSlot(
 //     ENDFOR
 //   ENDFOR
 //
-
+// TODO read again after I know MethodData better
+//   another is what is the valid case for implicitly implemented interface? seems compiler won't emit those by default?
 VOID
 MethodTableBuilder::PlaceInterfaceMethods()
 {
@@ -7554,7 +7573,7 @@ MethodTableBuilder::PlaceInterfaceMethods()
         // There are three reasons why an interface could be in the implementation list
         // 1. Inherited from parent
         // 2. Explicitly declared in the implements list
-        // 3. Implicitly declared through the implements list of an explicitly declared interface
+        // 3. Implicitly declared through the implements list of an explicitly declared interface   # 这个case 3是不是不太好实现的样子，因为compiler会把所有这种继承出来的interface populate成explicit的样子
         //
         // The reason these cases need to be distinguished is that an inherited interface that is
         // also explicitly redeclared in the implements list must be fully reimplemented using the
@@ -10217,6 +10236,10 @@ void MethodTableBuilder::CheckForSystemTypes()
 // way to allocate a new MT. Don't try calling new / ctor.
 // Called from SetupMethodTable
 // This needs to be kept consistent with MethodTable::GetSavedExtent()
+/*
+Calc the size of MethodTable and allocate
+Init some fields of MethodTable: some flags, parent MT, indirectionSlot
+*/
 MethodTable * MethodTableBuilder::AllocateNewMT(
     Module *pLoaderModule,
     DWORD dwVtableSlots,
@@ -11721,6 +11744,7 @@ void MethodTableBuilder::CheckForTypeEquivalence(
     STANDARD_VM_CONTRACT;
 
 #ifdef FEATURE_TYPEEQUIVALENCE
+    // basic case is "System.Runtime.InteropServices.TypeIdentifierAttribute"
     bmtProp->fIsTypeEquivalent = !!IsTypeDefEquivalent(GetCl(), GetModule());
 
     if (bmtProp->fIsTypeEquivalent)
@@ -12380,6 +12404,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
 
     // Create a EEClass entry for it, filling out a few fields, such as the parent class token
     // (and the generic type should we be creating an instantiation)
+    // 这个基本上就是分配了内存+复制了几个初始的flag
     EEClass * pClass = MethodTableBuilder::CreateClass(
         pModule,
         cl,
@@ -12507,7 +12532,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
                         genericsInfo.pVarianceInfo,
                         pModule,
                         SigPointer(pSig, cSig),
-                        gpCovariant))
+                        gpCovariant))   // 这个应该单纯是用来防止在第一次触发CheckVarianceInSig中的revert逻辑，感觉指定default parameter是更合适的
                 {
                     pAssembly->ThrowTypeLoadException(
                         pInternalImport,

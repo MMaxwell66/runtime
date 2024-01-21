@@ -1407,7 +1407,7 @@ EquivalenceCalculated:
 }
 #endif // FEATURE_TYPEEQUIVALENCE
 
-//==========================================================================================
+//TODO==========================================================================================
 BOOL MethodTable::CanCastToInterface(MethodTable *pTargetMT, TypeHandlePairList *pVisited)
 {
     CONTRACTL

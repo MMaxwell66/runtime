@@ -315,6 +315,7 @@ protected:
 // Each TypeVarTypeDesc represents a class or method type variable, as specified by a GenericParam entry.
 // The type variables are tied back to the class or method that *defines* them.
 // This is done through typedef or methoddef tokens.
+// 有一种情况就是用来表示 Type parameter的
 
 class TypeVarTypeDesc : public TypeDesc
 {

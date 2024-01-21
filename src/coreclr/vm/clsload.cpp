@@ -20,6 +20,12 @@ LoadTypeHandleThrowing: Name->TypeHandle
 
 LoadTypeDefOrRefThrowing
 
+LoadApproxTypeThrowing:
+    token + Sig + SigContext
+    1. 它的signature里面有Sig + SigContext这两个如何影响具体的load？
+
+ResolveTokenToTypeDefThrowing：
+    待验证：似乎是把TypeRef解析到TypeDef+module
 */
 
 // TODO: read ready to run case, ExportedType, reflect
@@ -263,6 +269,7 @@ Module *ClassLoader::ComputeLoaderModule(TypeKey *typeKey)
 }
 
 /*static*/
+// 检查Instantiation里面的每个是不是就是token对应的class里面的type parameters
 BOOL ClassLoader::IsTypicalInstantiation(Module *pModule, mdToken token, Instantiation inst)
 {
     CONTRACTL
@@ -2854,6 +2861,16 @@ ClassLoader::LoadApproxParentThrowing(
 
     if (RidFromToken(crExtends) != mdTokenNil)
     {
+        // 我们以 Lazy<T, TMetadata> 为例，它的extends是一个blob
+        // 15 12 85 94 01 13 00
+        // 0x15 ELEMENT_TYPE_GENERICINST
+        // 0x12 ELEMENT_TYPE_CLASS
+        // 0x85 0x94 => 0x594 => 0x00(TypeDef) 165 (Lazy`1)
+        // 0x01 GenArgCount = 1
+        // 0x13 ELEMENT_TYPE_VAR (generic parameter)
+        // 0x00 => #0
+        // => Lazy`1[T0]
+
         // Do an "approximate" load of the parent, replacing reference types in the instantiation by Object
         // This is to avoid cycles in the loader e.g. on class C : D<C> or class C<T> : D<C<T>>
         // We fix up the exact parent later in LoadInstantiatedInfo
@@ -2873,6 +2890,7 @@ ClassLoader::LoadApproxParentThrowing(
         if (IsTdInterface(dwAttrClass))
         {
             // Interfaces must extend from Object
+            // 但methodtablbuilder.cpp里面的一条注释是： "MDVal check: must have nil tkExtends and must be tdAbstract"
             if (! pParentMethodTable->IsObjectClass())
                 pAssembly->ThrowTypeLoadException(pInternalImport, cl, IDS_CLASSLOAD_INTERFACEOBJECT);
         }
@@ -2981,6 +2999,7 @@ TypeHandle ClassLoader::CreateTypeHandleForTypeKey(TypeKey* pKey, AllocMemTracke
     }
     else if (pKey->HasInstantiation())
     {
+        // 对于inst是TypeVarTypeDesc好像就是CanonicalGenericInstnatiation的一种
         if (IsCanonicalGenericInstantiation(pKey->GetInstantiation()))
         {
             typeHnd = CreateTypeHandleForTypeDefThrowing(pKey->GetModule(),
@@ -3072,6 +3091,7 @@ TypeHandle ClassLoader::CreateTypeHandleForTypeKey(TypeKey* pKey, AllocMemTracke
 // particular, exact parent info (base class and interfaces) is loaded
 // in a later phase
 // 不止TypeDef被publish, MethodDef和FieldDef也被publish
+// 所谓Publihs就是把对应的东西（TypeHandle, MethdDesc, FieldDesc）加到moudle的token -> handle的映射线性表中去。
 /*static*/
 TypeHandle ClassLoader::PublishType(TypeKey *pTypeKey, TypeHandle typeHnd)
 {

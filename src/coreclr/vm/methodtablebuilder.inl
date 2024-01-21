@@ -114,6 +114,7 @@ inline MethodTableBuilder::METHOD_IMPL_TYPE MethodTableBuilder::DeclaredMethodIt
 }
 
 //***************************************************************************************
+// if any MethodImpl of this class whose body is this one
 inline BOOL  MethodTableBuilder::DeclaredMethodIterator::IsMethodImpl()
 {
     LIMITED_METHOD_CONTRACT;

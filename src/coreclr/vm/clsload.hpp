@@ -786,6 +786,8 @@ public:
     //
     // If the code for the type handle is not shared then return
     // the type handle itself.
+    //
+    //    <T> --> <T> (use type parameter)
     static TypeHandle CanonicalizeGenericArg(TypeHandle genericArg);
 
     // Determine if the specified type representation induces a sharable

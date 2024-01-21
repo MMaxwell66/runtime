@@ -96,6 +96,7 @@ typedef DPTR(DictionaryLayout) PTR_DictionaryLayout;
 
 // The type of dictionary layouts. We don't include the number of type
 // arguments as this is obtained elsewhere
+// when alloc, sizeof(DictionaryLayout) + sizeof(DictionaryEntryLayout) * numSlots-1;
 class DictionaryLayout
 {
     friend class Dictionary;
@@ -104,10 +105,10 @@ private:
     WORD m_numSlots;
 
     // Number of non-type-argument slots of the initial layout before any expansion
-    WORD m_numInitialSlots;
+    WORD m_numInitialSlots;             // init to m_numSlots
 
     // m_numSlots of these
-    DictionaryEntryLayout m_slots[1];
+    DictionaryEntryLayout m_slots[1];   // actual is m_slots[m_numSlots];
 
     static BOOL FindTokenWorker(LoaderAllocator*                    pAllocator,
                                 DWORD                               numGenericArgs,
