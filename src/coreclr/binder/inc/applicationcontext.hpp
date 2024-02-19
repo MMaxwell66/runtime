@@ -118,10 +118,10 @@ namespace BINDER_SPACE
         FailureCache      *m_pFailureCache;
         CRITSEC_COOKIE     m_contextCS;
 
-        StringArrayList    m_platformResourceRoots;
-        StringArrayList    m_appPaths;
+        StringArrayList    m_platformResourceRoots;                 // from "PLATFORM_RESOURCE_ROOTS"
+        StringArrayList    m_appPaths;                              // from "APP_PATHS"
 
-        SimpleNameToFileNameMap * m_pTrustedPlatformAssemblyMap;
+        SimpleNameToFileNameMap * m_pTrustedPlatformAssemblyMap;    // from "TRUSTED_PLATFORM_ASSEMBLIES" of the coreclr initialize properties
     };
 
 #include "applicationcontext.inl"

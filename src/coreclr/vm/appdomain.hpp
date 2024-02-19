@@ -2175,7 +2175,7 @@ private:
     SPTR_DECL(AppDomain, m_pTheAppDomain);
 
     SString         m_friendlyName;
-    PTR_Assembly    m_pRootAssembly;
+    PTR_Assembly    m_pRootAssembly;    // entry point assembly
 
     // General purpose flags.
     DWORD           m_dwFlags;
@@ -2260,7 +2260,7 @@ public:
     AssemblySpecBindingCache  m_AssemblyCache;
     size_t                    m_MemoryPressure;
 
-    ArrayList m_NativeDllSearchDirectories;
+    ArrayList m_NativeDllSearchDirectories; // "NATIVE_DLL_SEARCH_DIRECTORIES" of the coreclr initialize properties
     bool m_ForceTrivialWaitOperations;
 
 private:

@@ -1319,7 +1319,7 @@ static void RunMainInternal(Param* pParam)
 
 /* static */
 HRESULT RunMain(MethodDesc *pFD ,
-                short numSkipArgs,
+                short numSkipArgs,  // args中前面需要跳过的数量，不过用的是stringArgs了这个参数就没用了。
                 INT32 *piRetVal,
                 PTRARRAYREF *stringArgs /*=NULL*/)
 {

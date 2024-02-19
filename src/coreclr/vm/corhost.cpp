@@ -323,6 +323,7 @@ HRESULT CorHost2::ExecuteAssembly(DWORD dwAppDomainId,
         GCPROTECT_BEGIN(arguments);
 
         // Here we call the managed method that gets the cmdLineArgs array.
+        // Environment.InitializeCommandLineArgs
         arguments = SetCommandLineArgs(pwzAssemblyPath, argc, argv);
 
         if(CLRConfig::GetConfigValue(CLRConfig::INTERNAL_Corhost_Swallow_Uncaught_Exceptions))

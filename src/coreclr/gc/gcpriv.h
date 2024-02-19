@@ -194,6 +194,7 @@ inline void FATAL_GC_ERROR()
 #define BACKGROUND_GC   //concurrent background GC (requires WRITE_WATCH)
 
 // We need the lower 3 bits in the MT to do our bookkeeping so doubly linked free list is only for 64-bit
+// PR#43021 好像是在gen2的free list上面用 [3] 作为了prev添加了双链表
 #if defined(BACKGROUND_GC) && defined(HOST_64BIT)
 #define DOUBLY_LINKED_FL
 #endif //HOST_64BIT
@@ -599,10 +600,10 @@ enum allocation_state
     a_state_max
 };
 
-enum enter_msl_status
+enum enter_msl_status   // msl stands for more_space_lock
 {
     msl_entered,
-    msl_retry_different_heap
+    msl_retry_different_heap    // 如果当前heap被retire了在dynamic heap count下面
 };
 
 enum gc_type
@@ -655,7 +656,7 @@ public:
 #endif // STRESS_HEAP
 
     // These are opportunistically set
-    uint32_t entry_memory_load;
+    uint32_t entry_memory_load; // init@joined_generation_to_condemn
     uint64_t entry_available_physical_mem;
     uint32_t exit_memory_load;
 
@@ -813,8 +814,8 @@ class allocator
 {
     int first_bucket_bits;
     unsigned int num_buckets;
-    alloc_list first_bucket;
-    alloc_list* buckets;
+    alloc_list first_bucket;    // the common case, for gen0/gen1, only one bucket
+    alloc_list* buckets;    // buckets[1..]
     int gen_number;
     alloc_list& alloc_list_of (unsigned int bn);
     size_t& alloc_list_damage_count_of (unsigned int bn);
@@ -979,7 +980,7 @@ public:
     // so now they are part of gen2.
     //
     // If we rearrange regions between heaps, we need to make sure this is updated accordingly.
-    PTR_heap_segment start_segment;
+    PTR_heap_segment start_segment;     // 由 heap_segment->next 组成单链表
 #ifndef USE_REGIONS
     uint8_t*        allocation_start;
 #endif //!USE_REGIONS
@@ -1107,11 +1108,14 @@ public:
     // If the generation is condemned, we will calculate its new desired_allocation and re-init this field with that value.
     // If there's anything allocated into this generation, it will be updated, ie, decreased by
     // the amount that was allocated into this generation.
+    // 这个看上去是一开始给了一个比较大的值，然后随着alloc逐渐减少
+    // Q: 但是似乎有可能为负数，代表什么情况的？
+    // A: 似乎有一种可能性是，当被要求分配一块大于new_allocation的内存的时候（当然不超过physical limitation），这个值就会变成负值。
     ptrdiff_t new_allocation;
 
     //
     // The next group of fields are updated during a GC if that GC condemns this generation.
-    //
+    // init@generation_to_condemn
     // Same as new_allocation but only updated during a GC if the generation is condemned.
     // We should really just get rid of this.
     ptrdiff_t gc_new_allocation;
@@ -1416,7 +1420,7 @@ class region_free_list
     size_t  num_free_regions;
     size_t  size_free_regions;
     size_t  size_committed_in_free_regions;
-    size_t  num_free_regions_added;
+    size_t  num_free_regions_added; // num_free_regions === num_free_regions_added - num_free_regions_removed
     size_t  num_free_regions_removed;
     heap_segment* head_free_region;
     heap_segment* tail_free_region;
@@ -3440,7 +3444,7 @@ private:
     PER_HEAP_FIELD_SINGLE_GC uint8_t* min_overflow_address;
     PER_HEAP_FIELD_SINGLE_GC uint8_t* max_overflow_address;
 
-    PER_HEAP_FIELD_SINGLE_GC size_t alloc_contexts_used;
+    PER_HEAP_FIELD_SINGLE_GC size_t alloc_contexts_used;    // 有几个thread的alloc contexts指向这个gc_heap，在GC过程中统计
 
     // When we decide if we should expand the heap or not, we are
     // fine NOT to expand if we find enough free space in gen0's free
@@ -3451,8 +3455,8 @@ private:
     // Set during a GC and checked by allocator after that GC
     PER_HEAP_FIELD_SINGLE_GC BOOL sufficient_gen0_space_p;
 
-    // TODO: should just get rid of this for regions.
-    PER_HEAP_FIELD_SINGLE_GC BOOL ro_segments_in_range;
+    // TODO: should just get rid of this for regions. // yes, they get rid of this in later version
+    PER_HEAP_FIELD_SINGLE_GC BOOL ro_segments_in_range; // false for region
 
     PER_HEAP_FIELD_SINGLE_GC bool no_gc_oom_p;
     PER_HEAP_FIELD_SINGLE_GC heap_segment* saved_loh_segment_no_gc;
@@ -3599,6 +3603,8 @@ private:
     // REGIONS TODO: currently we only make use of SOH's promoted bytes to
     // make decisions whether we want to compact or sweep a region. We
     // should also enable this for LOH compaction.
+    //
+    // 1. scan root的时候会把mark的obj的大小加到每个region对应的里面去
     PER_HEAP_FIELD_SINGLE_GC size_t* survived_per_region;
     PER_HEAP_FIELD_SINGLE_GC size_t* old_card_survived_per_region;
 
@@ -3667,11 +3673,14 @@ private:
     /*****************************************/
 
     // calculated at the end of a GC and used in allocator
-    PER_HEAP_FIELD_SINGLE_GC_ALLOC size_t allocation_quantum;
+    PER_HEAP_FIELD_SINGLE_GC_ALLOC size_t allocation_quantum; // 一次alloc_context的alloc就可能要求这么多，所以这个是per thread的quantum吗？
 
     // TODO: actually a couple of entries in these elements are carried over from GC to GC -
     // collect_count and previous_time_clock. It'd be nice to isolate these out.
     // Only field used by allocation is new_allocation.
+    /*
+    when startup, inited in `init_dynamic_data`
+    */
     PER_HEAP_FIELD_SINGLE_GC_ALLOC dynamic_data dynamic_data_table[total_generation_count];
 
     // the # of bytes allocates since the last full compacting GC, maintained by the allocator and
@@ -3687,7 +3696,7 @@ private:
     PER_HEAP_FIELD_SINGLE_GC_ALLOC VOLATILE(int) alloc_context_count;
 
     // Init-ed during a GC and updated by allocator after that GC
-    PER_HEAP_FIELD_SINGLE_GC_ALLOC bool gen0_allocated_after_gc_p;
+    PER_HEAP_FIELD_SINGLE_GC_ALLOC bool gen0_allocated_after_gc_p; // as name
 #endif //MULTIPLE_HEAPS
 
 #ifdef BACKGROUND_GC
@@ -3725,7 +3734,7 @@ private:
 
     // This is also changed by find_object
     // It only affects perf.
-    PER_HEAP_FIELD_MAINTAINED int gen0_must_clear_bricks;
+    PER_HEAP_FIELD_MAINTAINED int gen0_must_clear_bricks; // 感觉是说如果我们有interior ptr就设置这个，后面alloc之类的后又相应的优化
 
     // This is maintained as BGC can indicate regions to add to it and the next blocking GC will thread
     // these regions to this list. A blocking GC can also add to this list. Regions on this list will be
@@ -3813,9 +3822,12 @@ private:
     // Keeps track of the highest address allocated by Alloc
     // Used in allocator code path. Blocking GCs do use it at the beginning (to update heap_segment_allocated) and
     // at the end they get initialized for the allocator.
+    // 似乎只考虑了gen0？把它特别拿出来有什么意义？
     PER_HEAP_FIELD_MAINTAINED_ALLOC uint8_t* alloc_allocated;
 
     // For regions this is the region we currently allocate in. Set by a blocking GC at the end.
+    // 猜测只有一个alloc_context能从这个heap_segment里面分配，需要看看多个acontext下这个是怎么维护的（忘记这个猜测的来由了，有msl的话这里考虑的是什么呢）
+    // 需要看的一个是这个region会怎么变化，比如一定是在GC的时候发生变化，还是说alloc的时候就有可能之类的
     PER_HEAP_FIELD_MAINTAINED_ALLOC heap_segment* ephemeral_heap_segment;
 
     // Used by both the allocator (which adds entries to the queue) and the GC (moves entries on the queue)
@@ -3858,8 +3870,12 @@ private:
     // Bookkeeping data structures. Even though these are per heap fields, they really point to
     // the global one for regions. And since we only do in place grow, these values don't ever
     // change after they are initialized. For segments they can get different values.
+    // gc1中assert了这 == g_gc_card_table
     PER_HEAP_FIELD_INIT_ONLY uint32_t* card_table;
     // The content is updated during GCs, by the allocator code paths and byfind_object.
+    /*
+    如果 gen0_bricks_cleared = false 的话，gen0对应的brick = -1
+    */
     PER_HEAP_FIELD_INIT_ONLY short* brick_table;
 #ifdef CARD_BUNDLE
     // The content is updated during GCs and by WB
@@ -4165,10 +4181,10 @@ private:
     // thought we do pass them to the WB code.
     //
     // For segments these are per heap fields.
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(uint8_t*)  ephemeral_low;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(uint8_t*)  ephemeral_low; // min/max all region of gen0/1
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(uint8_t*)  ephemeral_high;
 
-    // For segments these are per heap fields
+    // For segments these are per heap fields // 似乎被is_in_condemned_gc代替了
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_low; // low end of the lowest region being condemned
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_high; // high end of the highest region being condemned
 #endif //USE_REGIONS
@@ -4678,7 +4694,7 @@ public:
     /***************************************************************************************************/
     // public fields                                                                                   //
     /***************************************************************************************************/
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(BOOL) gc_started;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(BOOL) gc_started;    // main bool to check if gc is going on?
 
     // For regions this is for region size.
     PER_HEAP_ISOLATED_FIELD_INIT_ONLY size_t min_segment_size_shr;
@@ -4774,12 +4790,12 @@ class CFinalizeStaticAsserts {
 };
 #endif // FEATURE_PREMORTEM_FINALIZATION
 
-inline
+inline // begin@make phase =generation_size-dd_fragmentation
  size_t& dd_begin_data_size (dynamic_data* inst)
 {
   return inst->begin_data_size;
 }
-inline
+inline // 1. plan phase, += plug_size
  size_t& dd_survived_size (dynamic_data* inst)
 {
   return inst->survived_size;
@@ -4888,7 +4904,7 @@ float dd_v_fragmentation_burden_limit (dynamic_data* inst)
 {
   return (min (2*dd_fragmentation_burden_limit (inst), 0.75f));
 }
-inline
+inline // free_list + free_obj
 size_t& dd_fragmentation (dynamic_data* inst)
 {
   return inst->fragmentation;
@@ -5107,7 +5123,7 @@ size_t generation_unusable_fragmentation (generation* inst)
 #define min_free_item_no_prev  (min_obj_size+sizeof(uint8_t*))
 struct plug
 {
-    uint8_t *  skew[plug_skew / sizeof(uint8_t *)];
+    uint8_t *  skew[plug_skew / sizeof(uint8_t *)]; // ptr, require 8bytes align
 };
 
 class pair
@@ -5157,7 +5173,7 @@ struct gap_reloc_pair
 struct DECLSPEC_ALIGN(8) aligned_plug_and_gap
 {
     size_t       additional_pad;
-    plug_and_gap plugandgap;
+    plug_and_gap plugandgap;    // 这里的pair之后有有一个align导致的gap
 };
 
 struct loh_obj_and_pad
@@ -5173,6 +5189,8 @@ struct loh_padding_obj
     ptrdiff_t   reloc;
     plug        m_plug;
 };
+// 根据 reloc 大胆猜测，LOH的移动是把移动的差值记录在reloc里面，然后扫描的过程中检查每个object对应的 loh_padding 里面的 reloc, != 0 就意味着要reloc，就把插值加到 object pointer 上面去。
+// 前半段推断是正确的，后半段不对，这个是结合brick table在修改pointer的时候快速查找offset用的。
 #define loh_padding_obj_size (sizeof(loh_padding_obj))
 
 //flags description
@@ -5207,7 +5225,7 @@ struct generation_region_info
 };
 #endif //USE_REGIONS
 
-class heap_segment
+class heap_segment  // init @ make_heap_segment
 {
     friend class allocator;
 
@@ -5215,6 +5233,8 @@ public:
     // For regions allocated is used to indicate whether this is a valid segment
     // or not, ie, if it's 0 it means it's freed; else it's either a valid value
     // or a negative value which means it's in a large region.
+    // gen0的这个值会更新吗？还是完全被 gc_heap->alloc_allocated代替？
+    // 如果小于0的使用方式参考 seg_mapping_table_segment_of 中的 `index += first_field;` ，i.e. region index bias
     uint8_t*        allocated;
     uint8_t*        committed;
     // For regions This could be obtained from region_allocator as each
@@ -5343,7 +5363,7 @@ const int min_regions_per_heap = ((ephemeral_generation_count + 1) + ((total_gen
 enum allocate_direction
 {
     allocate_forward = 1,
-    allocate_backward = -1,
+    allocate_backward = -1, // 这个backward看上去还没有完全支持好，比如on_used_changed里面就还不支持
 };
 
 typedef bool (*region_allocator_callback_fn)(uint8_t*);

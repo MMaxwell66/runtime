@@ -239,7 +239,7 @@ struct alloc_context : gc_alloc_context
         gc_reserved_1 = heap;
     }
 
-    inline SVR::GCHeap* get_home_heap()
+    inline SVR::GCHeap* get_home_heap() // 这个home heap在GC的时候负责处理这个alloc_context
     {
         return static_cast<SVR::GCHeap*>(gc_reserved_2);
     }

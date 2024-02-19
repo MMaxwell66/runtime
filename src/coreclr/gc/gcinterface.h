@@ -174,14 +174,14 @@ typedef void (CALLBACK *HANDLESCANPROC)(PTR_UNCHECKED_OBJECTREF pref, uintptr_t 
 // has its own allocation context that it hands to the GC when allocating.
 struct gc_alloc_context
 {
-    uint8_t*       alloc_ptr;
+    uint8_t*       alloc_ptr;   // reset to 0 after GC
     uint8_t*       alloc_limit;
     int64_t        alloc_bytes; //Number of bytes allocated on SOH by this context
     int64_t        alloc_bytes_uoh; //Number of bytes allocated not on SOH by this context
     // These two fields are deliberately not exposed past the EE-GC interface.
     void*          gc_reserved_1;
     void*          gc_reserved_2;
-    int            alloc_count;
+    int            alloc_count; // for mult-heap, reset during gc `FixAllocContext`
 public:
 
     void init()
@@ -1037,7 +1037,7 @@ enum GC_ALLOC_FLAGS
     GC_ALLOC_CONTAINS_REF       = 2,
     GC_ALLOC_ALIGN8_BIAS        = 4,
     GC_ALLOC_ALIGN8             = 8,
-    GC_ALLOC_ZEROING_OPTIONAL   = 16,
+    GC_ALLOC_ZEROING_OPTIONAL   = 16,   // 似乎是说跳过清零，在 AllocateUninitializedArray 中被使用
     GC_ALLOC_LARGE_OBJECT_HEAP  = 32,
     GC_ALLOC_PINNED_OBJECT_HEAP = 64,
     GC_ALLOC_USER_OLD_HEAP      = GC_ALLOC_LARGE_OBJECT_HEAP | GC_ALLOC_PINNED_OBJECT_HEAP,

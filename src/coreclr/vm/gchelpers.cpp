@@ -162,7 +162,7 @@ inline void CheckObjectSize(size_t alloc_size)
 
     size_t max_object_size;
 #ifdef HOST_64BIT
-    if (g_pConfig->GetGCAllowVeryLargeObjects())
+    if (g_pConfig->GetGCAllowVeryLargeObjects())    // 这种可能就适合用linux那个技术，动态修改代码段来避免if分支，这里甚至可以直接修改Imm
     {
         max_object_size = (INT64_MAX - 7 - min_obj_size);
     }
@@ -223,7 +223,7 @@ inline Object* Alloc(size_t size, GC_ALLOC_FLAGS flags)
     if (GCHeapUtilities::UseThreadAllocationContexts())
     {
         gc_alloc_context *threadContext = GetThreadAllocContext();
-        GCStress<gc_on_alloc>::MaybeTrigger(threadContext);
+        GCStress<gc_on_alloc>::MaybeTrigger(threadContext); // TODO: trigger gc?
         retVal = GCHeapUtilities::GetGCHeap()->Alloc(threadContext, size, flags);
     }
     else

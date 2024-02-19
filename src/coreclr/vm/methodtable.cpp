@@ -7730,6 +7730,8 @@ void MethodTable::MethodDataObject::FillEntryDataForAncestor(MethodTable * pMT)
 } // MethodTable::MethodDataObject::FillEntryDataForAncestor
 
 //==========================================================================================
+// 比较草率的分析，感觉这个主要考虑了一些继承的问题。下面的PopulateNextLevel会去一层层的读取parent，知道找到了想要的slot，但是其中根据不同情况这个“找到”的定义需要细看。
+// 包括想Impl和Desc具体指代什么都需要在考量一下。
 MethodDesc * MethodTable::MethodDataObject::GetDeclMethodDesc(UINT32 slotNumber)
 {
     WRAPPER_NO_CONTRACT;

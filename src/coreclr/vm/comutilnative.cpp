@@ -645,7 +645,7 @@ FCIMPL1(void, GCInterface::SetLOHCompactionMode, int newLOHCompactionyMode)
 }
 FCIMPLEND
 
-
+// 这个 percentage 应该是 dd_new_allocation 的数字，所以随着alloc这个值会逐渐减小
 FCIMPL2(FC_BOOL_RET, GCInterface::RegisterForFullGCNotification, UINT32 gen2Percentage, UINT32 lohPercentage)
 {
     FCALL_CONTRACT;

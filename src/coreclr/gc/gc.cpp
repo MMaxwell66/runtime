@@ -1,6 +1,10 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+/*
+不同define的TOREAD:
+DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DOUBLY_LINKED_FL
+*/
 
 //
 // #Overview
@@ -730,14 +734,14 @@ struct DECLSPEC_ALIGN(HS_CACHE_LINE_SIZE) join_structure
 
     // Keep polling/wait structures on separate line write once per join
     DECLSPEC_ALIGN(HS_CACHE_LINE_SIZE)
-    GCEvent joined_event[3]; // the last event in the array is only used for first_thread_arrived.
-    Volatile<int> lock_color;
+    GCEvent joined_event[3]; // the last event in the array is only used for first_thread_arrived.  // manual reset
+    Volatile<int> lock_color; // 这个lock color好像就是 0->1->0->1这样循环，估计是用来避免一些竞争从而用两组event
     VOLATILE(BOOL) wait_done;
     VOLATILE(BOOL) joined_p;
 
     // Keep volatile counted locks on separate cache line write many per join
     DECLSPEC_ALIGN(HS_CACHE_LINE_SIZE)
-    VOLATILE(int) join_lock;
+    VOLATILE(int) join_lock; // init to n_threads, then dec by 1 for each threads until 0
     VOLATILE(int) r_join_lock;
 
 };
@@ -769,7 +773,7 @@ class t_join
     join_structure join_struct;
 
     int id;
-    gc_join_flavor flavor;
+    gc_join_flavor flavor; // field end
 
 #ifdef JOIN_STATS
     uint64_t start[MAX_SUPPORTED_CPUS], end[MAX_SUPPORTED_CPUS], start_seq;
@@ -843,7 +847,8 @@ public:
         FIRE_EVENT(GCJoin_V2, heap, time, type, join_id);
     }
 
-    void join (gc_heap* gch, int join_id)
+    // 注意不是说所有thread都join了之后就unblock了，使用pattern是这样，所有thread call join, 最后一个thread不会wait而是继续执行，当最后一个thread调用restart之后，其他thread恢复执行。而 joined() 只有最后一个thread在join之后restart之前为true
+    void join (gc_heap* gch /* only for heap_number */, int join_id)
     {
 #ifdef JOIN_STATS
         // parallel execution ends here
@@ -931,6 +936,7 @@ respin:
     // after the work is done.
     // Note that you cannot call this twice in a row on the same thread. Plus there's no
     // need to call it twice in row - you should just merge the work.
+    // 会不会发生这样的情况，第一个thread r_join成功了，然后把其中的活都做了之后r_restart了，然后其它thread来到了r_join就有再次进入了r_join保护的代码段了。
     BOOL r_join (gc_heap* gch, int join_id)
     {
 
@@ -1817,6 +1823,7 @@ ptrdiff_t round_down (ptrdiff_t add, int pitch)
     return ((add / pitch) * pitch);
 }
 
+// FEATURE_STRUCTALIGN is a attempt to define align on per type base, see issues like https://github.com/dotnet/runtime/issues/22990
 #if defined(FEATURE_STRUCTALIGN) && defined(RESPECT_LARGE_ALIGNMENT)
 // FEATURE_STRUCTALIGN allows the compiler to dictate the alignment,
 // i.e, if a larger alignment matters or is beneficial, the compiler
@@ -2323,15 +2330,15 @@ void* virtual_alloc (size_t size, bool use_large_pages_p, uint16_t numa_node = N
 uint32_t*   gc_heap::mark_array;
 #endif //BACKGROUND_GC && !MULTIPLE_HEAPS
 
-uint8_t**   gc_heap::g_mark_list;
+uint8_t**   gc_heap::g_mark_list; // init@init_semi_shared
 uint8_t**   gc_heap::g_mark_list_copy;
 size_t      gc_heap::mark_list_size;
 size_t      gc_heap::g_mark_list_total_size;
 bool        gc_heap::mark_list_overflow;
 #ifdef USE_REGIONS
-uint8_t***  gc_heap::g_mark_list_piece;
+uint8_t***  gc_heap::g_mark_list_piece; // @grow_mark_list_piece
 size_t      gc_heap::g_mark_list_piece_size;
-size_t      gc_heap::g_mark_list_piece_total_size;
+size_t      gc_heap::g_mark_list_piece_total_size;  // 基本上等于 g_mark_list_piece_size * 2 * n_heaps 除非 heap size 变化导致 piece_size 变大
 #endif //USE_REGIONS
 
 seg_mapping* seg_mapping_table;
@@ -2391,7 +2398,7 @@ const int n_heaps = 1;
 size_t      gc_heap::card_table_element_layout[total_bookkeeping_elements + 1]; // offsetof
 uint8_t*    gc_heap::bookkeeping_start = nullptr;
 #ifdef USE_REGIONS
-uint8_t*    gc_heap::bookkeeping_covered_committed = nullptr;       // Q: 这个作用？
+uint8_t*    gc_heap::bookkeeping_covered_committed = nullptr;       // Q: 这个作用？ A: 记录了bookkeeping已经commit的地址，region_left_used会回缩，但是bookkeeping不会回缩，所以需要这个来记录。
 size_t      gc_heap::bookkeeping_sizes[total_bookkeeping_elements]; // 目前已经使用的size，一个目的是负责commit page的处理。
 #endif //USE_REGIONS
 
@@ -2551,7 +2558,7 @@ VOLATILE(BOOL) gc_heap::gc_background_running = FALSE;
 
 #ifdef USE_REGIONS
 #ifdef MULTIPLE_HEAPS
-uint8_t*    gc_heap::gc_low;
+uint8_t*    gc_heap::gc_low; // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1
 uint8_t*    gc_heap::gc_high;
 #endif //MULTIPLE_HEAPS
 VOLATILE(uint8_t*)    gc_heap::ephemeral_low;
@@ -4154,7 +4161,7 @@ uint8_t* region_allocator::allocate (uint32_t num_units, allocate_direction dire
         total_free_units -= num_units;
         if (fn != nullptr)
         {
-            if (!fn (global_region_left_used))
+            if (!fn (global_region_left_used))  // on_used_changed 似乎只支持forward目前，所以有backward的case吗？
             {
                 delete_region_impl (alloc);
                 alloc = nullptr;
@@ -4630,7 +4637,7 @@ gc_heap* seg_mapping_table_heap_of_gc (uint8_t* o)
 heap_segment* seg_mapping_table_segment_of (uint8_t* o)
 {
 #ifdef FEATURE_BASICFREEZE
-    if ((o < g_gc_lowest_address) || (o >= g_gc_highest_address))
+    if ((o < g_gc_lowest_address) || (o >= g_gc_highest_address)) // 啥情况？还能不在region范围内的？
         return ro_segment_lookup (o);
 #endif //FEATURE_BASICFREEZE
 
@@ -4726,8 +4733,10 @@ size_t gcard_of ( uint8_t*);
 
 #define slot(i, j) ((uint8_t**)(i))[(j)+1]
 
-#define free_object_base_size (plug_skew + sizeof(ArrayBase))
+#define free_object_base_size (plug_skew + sizeof(ArrayBase)) /* 24 */
 
+// free list min size is min_free_list = 2*min_obj_size
+// undo用来在plan时候使用了这个free但是后面决定不compact的时候修复free list
 #define free_list_slot(x) ((uint8_t**)(x))[2]
 #define free_list_undo(x) ((uint8_t**)(x))[-1]
 #define UNDO_EMPTY ((uint8_t*)1)
@@ -5099,7 +5108,7 @@ void set_special_bits (uint8_t* node, size_t special_bits)
 inline size_t unused_array_size(uint8_t * p)
 {
     assert(((CObjectHeader*)p)->IsFree());
-
+    // size_t的原因见make_unused_array, 利用了64bit处理了>4GiB的free space
     size_t* numComponentsPtr = (size_t*)(p + ArrayBase::GetOffsetOfNumComponents());
     return free_object_base_size + *numComponentsPtr;
 }
@@ -7060,7 +7069,11 @@ void gc_heap::gc_thread_function ()
         // inactive GC threads may observe gc_t_join.joined() being true here
         assert ((n_heaps <= heap_number) || !gc_t_join.joined());
 
-        if (heap_number == 0)
+        /*
+        heap0等待ee_suspend_event （或者是需要decommit的时候周期性唤醒），被唤醒之后会suspend EE, 然后 set gc_start_event
+        其他threads wait gc_start_event (manual reset event)
+        */
+        if (heap_number == 0)   // 会不会导致每个CPU在GC的时候有更高的要求，导致别的affinity会影响GC？
         {
             bool wait_on_time_out_p = gradual_decommit_in_progress_p;
             uint32_t wait_time = DECOMMIT_TIME_STEP_MILLISECONDS;
@@ -7287,7 +7300,7 @@ void gc_heap::gc_thread_function ()
 
             dprintf (SPINLOCK_LOG, ("GC Lgc"));
             leave_spin_lock (&gc_heap::gc_lock);
-
+            // 上面的GC lock被释放会不会导致在else里面的thread wait成功之前一个新的GC被触发导致其他thread困在else语句里面？应该不会，gc要这个h0的thread去启动
             gc_heap::internal_gc_done = true;
 
             if (proceed_with_gc_p)
@@ -7352,6 +7365,9 @@ bool gc_heap::virtual_alloc_commit_for_heap (void* addr, size_t size, int h_numb
     return GCToOSInterface::VirtualCommit(addr, size);
 }
 
+/*
+对于大页，因为在init的时候commit了，所以这里不需要再commit了，否则正常commit。对于像是bookkeeping的内存，正常commit
+*/
 bool gc_heap::virtual_commit (void* address, size_t size, int bucket, int h_number, bool* hard_limit_exceeded_p)
 {
     /**
@@ -7854,7 +7870,7 @@ void gc_heap::fix_youngest_allocation_area()
     // still used in the allocation path during GCs.
     assert (generation_allocation_pointer (youngest_generation) == nullptr);
     assert (generation_allocation_limit (youngest_generation) == nullptr);
-    heap_segment_allocated (ephemeral_heap_segment) = alloc_allocated;
+    heap_segment_allocated (ephemeral_heap_segment) = alloc_allocated;  // 为什么要在这里fix?
     assert (heap_segment_mem (ephemeral_heap_segment) <= heap_segment_allocated (ephemeral_heap_segment));
     assert (heap_segment_allocated (ephemeral_heap_segment) <= heap_segment_reserved (ephemeral_heap_segment));
 }
@@ -7874,10 +7890,13 @@ void gc_heap::fix_allocation_context (alloc_context* acontext, BOOL for_gc_p,
     }
     int align_const = get_alignment_constant (TRUE);
 #ifdef USE_REGIONS
-    bool is_ephemeral_heap_segment = in_range_for_segment (acontext->alloc_limit, ephemeral_heap_segment);
+    bool is_ephemeral_heap_segment = in_range_for_segment (acontext->alloc_limit, ephemeral_heap_segment);  // 我理解thread的acontext都是gen0，什么时候会是false? 还是说对于!for_gc_p这个context有可能不是thread的？
 #else // USE_REGIONS
     bool is_ephemeral_heap_segment = true;
 #endif // USE_REGIONS
+    // 目的是: 1. 更新所有acontext的alloc_limit->alloc_allocated, 2. 更新 alloc_allocated
+    // 因为alloc_allocated对应的是最新的acontext所以它是ephemeral中最后的一个
+    // 第一个判断排除了gen0中其他的region，第二个排除了ephemeral region中前面的acontext
     if ((!is_ephemeral_heap_segment) || ((size_t)(alloc_allocated - acontext->alloc_limit) > Align (min_obj_size, align_const)) ||
         !for_gc_p)
     {
@@ -7903,7 +7922,7 @@ void gc_heap::fix_allocation_context (alloc_context* acontext, BOOL for_gc_p,
     else if (for_gc_p)
     {
         assert (is_ephemeral_heap_segment);
-        alloc_allocated = acontext->alloc_ptr;
+        alloc_allocated = acontext->alloc_ptr;  // 会不会有多个acontxt走入这个if？应该不会。为什么这里不会make_unused_array?
         assert (heap_segment_allocated (ephemeral_heap_segment) <=
                 heap_segment_committed (ephemeral_heap_segment));
         if (record_ac_p)
@@ -7972,7 +7991,7 @@ void gc_heap::fix_allocation_contexts (BOOL for_gc_p)
     args.for_gc_p = for_gc_p;
     args.heap = __this;
 
-    GCToEEInterface::GcEnumAllocContexts(fix_alloc_context, &args);
+    GCToEEInterface::GcEnumAllocContexts(fix_alloc_context, &args); // 这个要拿到 s_pThreadStore->m_Crst，好像实在SuspendEE的时候拿的，所以这个只有suspend的时候才能进行？
     fix_youngest_allocation_area();
 }
 
@@ -8095,7 +8114,7 @@ bool gc_heap::new_allocation_allowed (int gen_number)
     {
         if (gen_number != 0)
         {
-            // For UOH we will give it more budget before we try a GC.
+            // For UOH we will give it more budget before we try a GC. // Q: 为什么不直接在设置 new_allocation 的时间就多设置一点？
             if (settings.concurrent)
             {
                 dynamic_data* dd2 = dynamic_data_of (gen_number);
@@ -10925,7 +10944,7 @@ void gc_heap::merge_mark_lists (size_t total_mark_list_size)
         piece_count++;
     }
     else
-    {
+    {   // 合并sorted，线性找到最小的arr，把arr开头的< 2rd lowest的copy过去
         while (source_count > 1)
         {
             // find the lowest and second lowest value in the sources we're merging from
@@ -11905,6 +11924,10 @@ void gc_heap::return_free_region (heap_segment* region)
 // USE_REGIONS TODO: SOH should be able to get a large region and split it up into basic regions
 // if needed.
 // USE_REGIONS TODO: In Server GC we should allow to get a free region from another heap.
+/*
+从region free list拿，或者allocate_new_region
+如果从free list拿需要更新重新 init_heap_segment, 统计 committed_by_oh 如果有 hard limit
+*/
 heap_segment* gc_heap::get_free_region (int gen_number, size_t size)
 {
     heap_segment* region = 0;
@@ -11938,7 +11961,7 @@ heap_segment* gc_heap::get_free_region (int gen_number, size_t size)
                 }
                 else
                 {
-                    ASSERT_HOLDING_SPIN_LOCK(&gc_lock);
+                    ASSERT_HOLDING_SPIN_LOCK(&gc_lock); // TODO: 什么时候拿到的lock?
                 }
 
                 // get it from the global list of huge free regions
@@ -12342,7 +12365,7 @@ heap_segment* gc_heap::make_heap_segment (uint8_t* new_pages, size_t size, gc_he
     dprintf (REGIONS_LOG, ("Making region %p->%p(%zdmb)",
         new_pages, (new_pages + size), (size / 1024 / 1024)));
     heap_segment* new_segment = get_region_info (new_pages);
-    uint8_t* start = new_pages + sizeof (aligned_plug_and_gap);
+    uint8_t* start = new_pages + sizeof (aligned_plug_and_gap); // Q: aligned_plug_and_gap? A: 有一个可能性是因为这个start是MT的位置，前面有些像header之类的空间要先跳过，从 a_fit_segment_end_p 中的 ((void**)allocated)[-1] = 0; 猜测而来
 #else
     heap_segment* new_segment = (heap_segment*)new_pages;
     uint8_t* start = new_pages + segment_info_size;
@@ -12428,7 +12451,7 @@ void gc_heap::init_heap_segment (heap_segment* seg, gc_heap* hp
 // this is always called on one thread only so calling seg_table->remove is fine.
 void gc_heap::delete_heap_segment (heap_segment* seg, BOOL consider_hoarding)
 {
-    if (!heap_segment_uoh_p (seg))
+    if (!heap_segment_uoh_p (seg)) // 对于region后面好像已经清理了
     {
         //cleanup the brick table back to the empty value
         clear_brick_table (heap_segment_mem (seg), heap_segment_reserved (seg));
@@ -12619,7 +12642,7 @@ void gc_heap::check_gen0_bricks()
         uint8_t* start = generation_allocation_start (generation_of (0));
         {
 #endif //USE_REGIONS
-            size_t end_b = brick_of (heap_segment_allocated (gen0_region));
+            size_t end_b = brick_of (heap_segment_allocated (gen0_region)); // 为什么不会align_on_brick?
             for (size_t b = brick_of (start); b < end_b; b++)
             {
                 assert (brick_table[b] != 0);
@@ -14744,7 +14767,7 @@ gc_heap* gc_heap::make_gc_heap (
 #endif //MULTIPLE_HEAPS
 }
 
-uint32_t
+uint32_t // TODO
 gc_heap::wait_for_gc_done(int32_t timeOut)
 {
     bool cooperative_mode = enable_preemptive ();
@@ -14783,6 +14806,7 @@ gc_heap::set_gc_done()
     exit_gc_done_event_lock();
 }
 
+// TODO
 void
 gc_heap::reset_gc_done()
 {
@@ -15477,7 +15501,7 @@ BOOL gc_heap::a_size_fit_p (size_t size, uint8_t* alloc_pointer, uint8_t* alloc_
         return FALSE;
     }
 
-    return ((size_t)(alloc_limit - alloc_pointer) >= (size + Align(min_obj_size, align_const)));
+    return ((size_t)(alloc_limit - alloc_pointer) >= (size + Align(min_obj_size, align_const)));    // Q: 加一个obj的意义？
 }
 
 // Grow by committing more pages
@@ -15497,9 +15521,9 @@ BOOL gc_heap::grow_heap_segment (heap_segment* seg, uint8_t* high_address, bool*
 
     size_t c_size = align_on_page ((size_t)(high_address - heap_segment_committed (seg)));
     c_size = max (c_size, commit_min_th);
-    c_size = min (c_size, (size_t)(heap_segment_reserved (seg) - heap_segment_committed (seg)));
+    c_size = min (c_size, (size_t)(heap_segment_reserved (seg) - heap_segment_committed (seg)));    // 上面的check已经保证了这件事情吧。
 
-    if (c_size == 0)
+    if (c_size == 0)    // 怎么理解呢，c_size应该是不可能为0了，但是上面 <= 检查返回的是true，这里返回的是false，让人琢磨不透。
         return FALSE;
 
     STRESS_LOG2(LF_GC, LL_INFO10000,
@@ -15601,6 +15625,7 @@ void gc_heap::make_free_obj (generation* gen, uint8_t* free_start, size_t free_s
 }
 
 //used only in older generation allocation (i.e during gc).
+// 处理之前的alloc_context，更新alloc_context
 void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
 {
     dprintf (3, ("gc Expanding segment allocation"));
@@ -15611,7 +15636,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
         {
             assert (generation_allocation_pointer (gen) >= heap_segment_mem (seg));
             assert (generation_allocation_pointer (gen) <= heap_segment_committed (seg));
-            heap_segment_plan_allocated (generation_allocation_segment (gen)) = generation_allocation_pointer (gen);
+            heap_segment_plan_allocated (generation_allocation_segment (gen)) = generation_allocation_pointer (gen); // Q: 为什么不是limit？ A: free space swallow
         }
         else
         {
@@ -16752,9 +16777,11 @@ uint16_t allocator::count_largest_items (etw_bucket_info* bucket_info,
 }
 #endif //FEATURE_EVENT_TRACE
 
+// 如果和已有的acontext相接，就扩大，否则处理好现有的acontext，用新的addr setup aconrtext
+// Q: 这里的 limit_size 是总是包括了 aligned_min_obj_size 吗？还是什么情况下会有？这个空间是干什么的？seg开头的gap应该不会每次alloc的保留吧。
 void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
                                 alloc_context* acontext, uint32_t flags,
-                                heap_segment* seg, int align_const, int gen_number)
+                                heap_segment* seg, int align_const, int gen_number) // 0 | loh_generation | poh_generation
 {
     bool uoh_p = (gen_number > 0);
     GCSpinLock* msl = uoh_p ? &more_space_lock_uoh : &more_space_lock_soh;
@@ -16781,7 +16808,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
                (size_t)start + limit_size - aligned_min_obj_size));
 
     if ((acontext->alloc_limit != start) &&
-        (acontext->alloc_limit + aligned_min_obj_size)!= start)
+        (acontext->alloc_limit + aligned_min_obj_size)!= start) // TODO：这个第二个判断是什么情况？我看GC_ALLOC_ZEROING_OPTIONAL那里也有这个pattern，猜测，好像是uoh是没有这个min_obj的
     {
         uint8_t*  hole = acontext->alloc_ptr;
         if (hole != 0)
@@ -16790,7 +16817,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
             dprintf (3, ("filling up hole [%zx, %zx[", (size_t)hole, (size_t)hole + ac_size + aligned_min_obj_size));
             // when we are finishing an allocation from a free list
             // we know that the free area was Align(min_obj_size) larger
-            acontext->alloc_bytes -= ac_size;
+            acontext->alloc_bytes -= ac_size; // 见下面，uoh是不是包括了amoj？不需要把它也剪掉吗？
             total_alloc_bytes -= ac_size;
             size_t free_obj_size = ac_size + aligned_min_obj_size;
             make_unused_array (hole, free_obj_size);
@@ -16813,7 +16840,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
                 size_t pad_size = aligned_min_obj_size;
                 dprintf (3, ("contiguous ac: making min obj gap %p->%p(%zd)",
                     acontext->alloc_ptr, (acontext->alloc_ptr + pad_size), pad_size));
-                make_unused_array (acontext->alloc_ptr, pad_size);
+                make_unused_array (acontext->alloc_ptr, pad_size); // 不用加到free_obj_space吗？
                 acontext->alloc_ptr += pad_size;
             }
         }
@@ -16966,7 +16993,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
     //this portion can be done after we release the lock
     if (seg == gen0_segment ||
        ((seg == nullptr) && (gen_number == 0) && (limit_size >= CLR_SIZE / 2)))
-    {
+    {   // TODO
         if (gen0_must_clear_bricks > 0)
         {
             //set the brick table to speed up find_object
@@ -16994,6 +17021,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
     //}
 }
 
+// 尝试将 size 扩大到 dd_new_allocation，但是不能超过 physical_limit
 size_t gc_heap::new_allocation_limit (size_t size, size_t physical_limit, int gen_number)
 {
     dynamic_data* dd = dynamic_data_of (gen_number);
@@ -17007,12 +17035,17 @@ size_t gc_heap::new_allocation_limit (size_t size, size_t physical_limit, int ge
     return limit;
 }
 
+/*
+For SOH: 如果 GC_ALLOC_ZEROING_OPTIONAL 返回 padded_size；否则返回 min(dd_new_allocation, physical_limit, allocation_quantum) 除非这个值小于 padded_size，那么返回 padded_size
+    简单的总结一下，就是尽可能的分配到几个limitation的最大值，但是一定要超过 padded_size，且不能超过 physical_limit。
+    也就是尽可能在满足条件的情况下分配更大的内存。
+*/
 size_t gc_heap::limit_from_size (size_t size, uint32_t flags, size_t physical_limit, int gen_number,
                                  int align_const)
 {
     size_t padded_size = size + Align (min_obj_size, align_const);
     // for LOH this is not true...we could select a physical_limit that's exactly the same
-    // as size.
+    // as size. // Exmaple?
     assert ((gen_number != 0) || (physical_limit >= padded_size));
 
     // For SOH if the size asked for is very small, we want to allocate more than just what's asked for if possible.
@@ -17330,7 +17363,7 @@ BOOL gc_heap::short_on_end_of_seg (heap_segment* seg)
 
 #ifdef USE_REGIONS
     assert (end_gen0_region_space != uninitialized_end_gen0_region_space);
-    BOOL sufficient_p = sufficient_space_regions_for_allocation (end_gen0_region_space, end_space_after_gc());
+    BOOL sufficient_p = sufficient_space_regions_for_allocation (end_gen0_region_space, end_space_after_gc());  // TODO: 这几个值的具体含义
 #else
     BOOL sufficient_p = sufficient_space_end_seg (allocated,
                                                   heap_segment_committed (seg),
@@ -17339,7 +17372,7 @@ BOOL gc_heap::short_on_end_of_seg (heap_segment* seg)
 #endif //USE_REGIONS
     if (!sufficient_p)
     {
-        if (sufficient_gen0_space_p)
+        if (sufficient_gen0_space_p)    // TODO: 这个值的设置情况
         {
             dprintf (GTC_LOG, ("gen0 has enough free space"));
         }
@@ -17350,8 +17383,15 @@ BOOL gc_heap::short_on_end_of_seg (heap_segment* seg)
     return !sufficient_p;
 }
 
+/*
+每个generation有一个free list，free list的每个bucket大小是乘2增加的，每个bucket是一个链表。
+链表的entry指向的应该是一个 g_gc_pFreeObjectMethodTable 的 uint8 array object，这个被用来占位free空间
+如果空间 < 2 obj_min_size就存不下维护用的数据结构，相关空间直接丢弃。应该是在gc compact的时候会被重新考虑进来
+对于gen0/gen1应该是只有一个bucket（需要确认）
+* 由于某些尚不清楚的原因，实际分配到 alloc_context 尾部是有一个 min_obj_size 大小的空间。（不确定uoh是不是也有这个空间）
+*/
 inline
-BOOL gc_heap::a_fit_free_list_p (int gen_number,
+BOOL gc_heap::a_fit_free_list_p (int gen_number,    // = 0
                                  size_t size,
                                  alloc_context* acontext,
                                  uint32_t flags,
@@ -17370,7 +17410,7 @@ BOOL gc_heap::a_fit_free_list_p (int gen_number,
         {
             dprintf (3, ("considering free list %zx", (size_t)free_list));
             size_t free_list_size = unused_array_size (free_list);
-            if ((size + Align (min_obj_size, align_const)) <= free_list_size)
+            if ((size + Align (min_obj_size, align_const)) <= free_list_size)   // 这个min_obj_size的目的是？看下面的comment
             {
                 dprintf (3, ("Found adequate unused area: [%zx, size: %zd",
                                 (size_t)free_list, free_list_size));
@@ -17379,15 +17419,16 @@ BOOL gc_heap::a_fit_free_list_p (int gen_number,
                 // We ask for more Align (min_obj_size)
                 // to make sure that we can insert a free object
                 // in adjust_limit will set the limit lower
-                size_t limit = limit_from_size (size, flags, free_list_size, gen_number, align_const);
-                dd_new_allocation (dynamic_data_of (gen_number)) -= limit;
+                // 感觉还是比较迷惑，free obj要2 min_obj_size，上面只保留了一个。会不会是为了gen2的gap用的，这里的代码好像是公用的，这是一个比较低的可能性。
+                size_t limit = limit_from_size (size, flags, free_list_size, gen_number, align_const);  // TODO: 这里好像会改变alloc size，什么情况？
+                dd_new_allocation (dynamic_data_of (gen_number)) -= limit; // Q: 这个dynamic_data_of是什么？
 
                 uint8_t*  remain = (free_list + limit);
                 size_t remain_size = (free_list_size - limit);
                 if (remain_size >= Align(min_free_list, align_const))
                 {
                     make_unused_array (remain, remain_size);
-                    gen_allocator->thread_item_front (remain, remain_size);
+                    gen_allocator->thread_item_front (remain, remain_size); // 放到链表的头部，thread略有迷惑性
                     assert (remain_size >= Align (min_obj_size, align_const));
                 }
                 else
@@ -17403,8 +17444,12 @@ BOOL gc_heap::a_fit_free_list_p (int gen_number,
                 can_fit = TRUE;
                 goto end;
             }
+            // gen0/gen1 discard. 感觉一个可能性是这些free space是上一次GC剩下来的碎片，如果比较小，没有比较再考虑了，直接discard以提升之后的检索性能。
+            // 但我还是感觉好处有吗？本身这个alloc就已经是第二层的alloc了，发生频率已经没那么高了，减少GC的次数才是更重要的吧。
+            // 这个代码似乎是在initlal commit的时候就有了，怀疑现如今还有必要discard吗。
             else if (gen_allocator->discard_if_no_fit_p())
             {
+                // TODO
                 assert (prev_free_item == 0);
                 dprintf (3, ("couldn't use this free area, discarding"));
                 generation_free_obj_space (gen) += free_list_size;
@@ -17417,7 +17462,7 @@ BOOL gc_heap::a_fit_free_list_p (int gen_number,
             {
                 prev_free_item = free_list;
             }
-            free_list = free_list_slot (free_list);
+            free_list = free_list_slot (free_list); // Q: free_list应该可以被看做是一个free object那么这里的[2]对应的正常来说是哪个field?
         }
     }
 end:
@@ -17527,7 +17572,7 @@ BOOL gc_heap::a_fit_free_list_uoh_p (size_t size,
                                        alloc_context* acontext,
                                        uint32_t flags,
                                        int align_const,
-                                       int gen_number)
+                                       int gen_number) // loh_generation | poh_generation
 {
     BOOL can_fit = FALSE;
     generation* gen = generation_of (gen_number);
@@ -17558,7 +17603,7 @@ BOOL gc_heap::a_fit_free_list_uoh_p (size_t size,
 #endif //FEATURE_LOH_COMPACTION
 
             // must fit exactly or leave formattable space
-            if ((diff == 0) || (diff >= (ptrdiff_t)Align (min_obj_size, align_const)))
+            if ((diff == 0) || (diff >= (ptrdiff_t)Align (min_obj_size, align_const)))  // diff = 0 的情况不是说 free_list_size 留下来一个 loh_pad 吗？
             {
 #ifdef BACKGROUND_GC
 #ifdef MULTIPLE_HEAPS
@@ -17581,6 +17626,7 @@ BOOL gc_heap::a_fit_free_list_uoh_p (size_t size,
 #ifdef FEATURE_LOH_COMPACTION
                 if (loh_pad)
                 {
+                    // ?
                     make_unused_array (free_list, loh_pad);
                     generation_free_obj_space (gen) += loh_pad;
                     limit -= loh_pad;
@@ -17635,7 +17681,7 @@ exit:
     return can_fit;
 }
 
-BOOL gc_heap::a_fit_segment_end_p (int gen_number,
+BOOL gc_heap::a_fit_segment_end_p (int gen_number, // 0 | loh_generation | poh_generation
                                    heap_segment* seg,
                                    size_t size,
                                    alloc_context* acontext,
@@ -17657,6 +17703,7 @@ BOOL gc_heap::a_fit_segment_end_p (int gen_number,
     size_t pad = Align (min_obj_size, align_const);
 
 #ifdef FEATURE_LOH_COMPACTION
+    // Q: 用途? A: 迫使每个alloc都有一个对应的gap，在compact的时候gap plug pair可以保证object独立移动
     size_t loh_pad = Align (loh_padding_obj_size, align_const);
     if (gen_number == loh_generation)
     {
@@ -17666,6 +17713,8 @@ BOOL gc_heap::a_fit_segment_end_p (int gen_number,
 
     uint8_t* end = heap_segment_committed (seg) - pad;
 
+    // end - allocated >= size + Align(min_obj_size, align_const)
+    // pad已经有个obj的空间了，这里还要加个align的目的？
     if (a_size_fit_p (size, allocated, end, align_const))
     {
         limit = limit_from_size (size,
@@ -17710,6 +17759,7 @@ BOOL gc_heap::a_fit_segment_end_p (int gen_number,
     goto found_no_fit;
 
 found_fit:
+    // limit 至少有 padded_size = size + Align(min_obj_size)
     dd_new_allocation (dynamic_data_of (gen_number)) -= limit;
 
 #ifdef BACKGROUND_GC
@@ -17765,6 +17815,7 @@ found_fit:
             ((allocated == acontext->alloc_limit) ||
              (allocated == (acontext->alloc_limit + Align (min_obj_size, align_const)))))
         {
+            // TODO：感觉这个有可能解释一些为什么要加 padded_obj的原因，因为这个if里面最后额外加了一个pad的样子。
             assert(gen_number == 0);
             assert(allocated > acontext->alloc_ptr);
 
@@ -17910,13 +17961,13 @@ BOOL gc_heap::trigger_ephemeral_gc (gc_reason gr, enter_msl_status* msl_status)
     return did_full_compact_gc;
 }
 
-BOOL gc_heap::soh_try_fit (int gen_number,
+BOOL gc_heap::soh_try_fit (int gen_number,  // = 0
                            size_t size,
                            alloc_context* acontext,
                            uint32_t flags,
                            int align_const,
                            BOOL* commit_failed_p,
-                           BOOL* short_seg_end_p)
+                           BOOL* short_seg_end_p)   // 看起来这个会影响用短暂GC还是完整GC，需要了解它更详细的含义
 {
     BOOL can_allocate = TRUE;
     if (short_seg_end_p)
@@ -17950,7 +18001,7 @@ BOOL gc_heap::soh_try_fit (int gen_number,
                 dprintf (REGIONS_LOG, ("h%d fixing region %p end to alloc ptr: %p, alloc_allocated %p",
                     heap_number, heap_segment_mem (ephemeral_heap_segment), acontext->alloc_ptr,
                     alloc_allocated));
-
+                // 应该是说这个region已经用尽了，尝试给gen0分配一个新的region。这里的fix的目的应该是把acontext中没用到的部分回收。
                 fix_allocation_context (acontext, TRUE, FALSE);
                 fix_youngest_allocation_area();
 
@@ -17996,13 +18047,13 @@ BOOL gc_heap::soh_try_fit (int gen_number,
     return can_allocate;
 }
 
-allocation_state gc_heap::allocate_soh (int gen_number,
+allocation_state gc_heap::allocate_soh (int gen_number, // = 0
                                           size_t size,
                                           alloc_context* acontext,
                                           uint32_t flags,
                                           int align_const)
 {
-    enter_msl_status msl_status = msl_entered;
+    enter_msl_status msl_status = msl_entered;  // more space lock在调用方已经taken
 
 #if defined (BACKGROUND_GC) && !defined (MULTIPLE_HEAPS)
     if (gc_heap::background_running_p())
@@ -18031,6 +18082,7 @@ allocation_state gc_heap::allocate_soh (int gen_number,
     gc_reason gr = reason_oos_soh;
     oom_reason oom_r = oom_no_failure;
 
+    // 下面这个注释挺有意思的，不知道写这个注释的出发点是什么。但是上次curl安全漏洞CVE-2023-38545的那个socks的状态机bug其实就是因为用了local variable但是没有正确维持住不同状态下的一致性导致的bug。
     // No variable values should be "carried over" from one state to the other.
     // That's why there are local variable for each state
 
@@ -18063,7 +18115,7 @@ allocation_state gc_heap::allocate_soh (int gen_number,
                                                   NULL);
                 soh_alloc_state = (can_use_existing_p ?
                                         a_state_can_allocate :
-                                        (commit_failed_p ?
+                                        (commit_failed_p ?  // TODO: 在region下面，上面的seg_end=NULL的情况下是不是一定commit_failed?
                                             a_state_trigger_full_compact_gc :
                                             a_state_trigger_ephemeral_gc));
                 break;
@@ -18442,7 +18494,7 @@ BOOL gc_heap::check_and_wait_for_bgc (alloc_wait_reason awr,
     return bgc_in_progress;
 }
 
-BOOL gc_heap::uoh_try_fit (int gen_number,
+BOOL gc_heap::uoh_try_fit (int gen_number, // loh_generation | poh_generation
                            size_t size,
                            alloc_context* acontext,
                            uint32_t flags,
@@ -18582,7 +18634,7 @@ bool gc_heap::should_retry_other_heap (int gen_number, size_t size)
     }
 }
 
-allocation_state gc_heap::allocate_uoh (int gen_number,
+allocation_state gc_heap::allocate_uoh (int gen_number, // loh_generation | poh_generation
                                           size_t size,
                                           alloc_context* acontext,
                                           uint32_t flags,
@@ -18958,6 +19010,11 @@ bool gc_heap::update_alloc_info (int gen_number, size_t allocated_size, size_t* 
     return exceeded_p;
 }
 
+/*
+gen_number: 0 | loh_generation | poh_generation
+至少对于gen0, 分配的应该是一个带align(min_obj) bias的，这个bias的含义到底是什么还是需要好好看看。另外分配的空间在size之后还有一个Align(min_obj_size)的额外的空间，这个空间的意义又是什么？
+这个好像是所有alloc的公共路径？需要确认下。猜测原因是`GC.RegisterForFullGCNotification`的逻辑似乎只在这里和GC里面检查。
+*/
 allocation_state gc_heap::try_allocate_more_space (alloc_context* acontext, size_t size,
                                     uint32_t flags, int gen_number)
 {
@@ -18972,13 +19029,13 @@ allocation_state gc_heap::try_allocate_more_space (alloc_context* acontext, size
     }
 
     bool loh_p = (gen_number > 0);
-    GCSpinLock* msl = loh_p ? &more_space_lock_uoh : &more_space_lock_soh;
+    GCSpinLock* msl = loh_p ? &more_space_lock_uoh : &more_space_lock_soh;  // per heap lock
 
 #ifdef SYNCHRONIZATION_STATS
     int64_t msl_acquire_start = GCToOSInterface::QueryPerformanceCounter();
 #endif //SYNCHRONIZATION_STATS
 
-    msl_status = enter_spin_lock_msl (msl);
+    msl_status = enter_spin_lock_msl (msl); // 正常似乎实在adjust_limit_clr里面释放lock
     check_msl_status ("TAMS", size);
     //if (msl_status == msl_retry_different_heap) return a_state_retry_allocate;
     add_saved_spinlock_info (loh_p, me_acquire, mt_try_alloc, msl_status);
@@ -19022,9 +19079,9 @@ allocation_state gc_heap::try_allocate_more_space (alloc_context* acontext, size
 
     dprintf (3, ("requested to allocate %zd bytes on gen%d", size, gen_number));
 
-    int align_const = get_alignment_constant (gen_number <= max_generation);
+    int align_const = get_alignment_constant (gen_number <= max_generation);    // the unusally case is 8 bytes for 32 bit loh
 
-    if (fgn_maxgen_percent)
+    if (fgn_maxgen_percent) // public GC.RegisterForFullGCNotification API
     {
         check_for_full_gc (gen_number, size);
     }
@@ -19095,6 +19152,10 @@ allocation_state gc_heap::try_allocate_more_space (alloc_context* acontext, size
 }
 
 #ifdef MULTIPLE_HEAPS
+/*
+1. alloc_count = 0, update home/alloc heap based on current CPU, alloc_context_count++
+*/
+// TODO
 void gc_heap::balance_heaps (alloc_context* acontext)
 {
     if (acontext->alloc_count < 4)
@@ -19423,6 +19484,7 @@ ptrdiff_t gc_heap::get_balance_heaps_uoh_effective_budget (int generation_num)
     }
 }
 
+// TODO
 gc_heap* gc_heap::balance_heaps_uoh (alloc_context* acontext, size_t alloc_size, int generation_num)
 {
     const int home_hp_num = heap_select::select_heap(acontext);
@@ -19610,7 +19672,7 @@ CObjectHeader* gc_heap::allocate (size_t jsize, alloc_context* acontext, uint32_
 #pragma inline_depth(0)
 #endif //_MSC_VER
 
-            if (! allocate_more_space (acontext, size, flags, 0))
+            if (! allocate_more_space (acontext, size, flags, 0))   // 这个allocate并是去分配一个至少size的bump allocator，不是说只分配那么点size，会根据allocation_quantum去调整，拿回来的可能会有额外的空间
                 return 0;
 
 #ifdef _MSC_VER
@@ -23952,6 +24014,9 @@ void gc_heap::garbage_collect_pm_full_gc()
     gc1();
 }
 
+/*
+EE已经被suspend, 每个server gc thread都会执行这个函数，n是gen number
+*/
 void gc_heap::garbage_collect (int n)
 {
     gc_pause_mode saved_settings_pause_mode = settings.pause_mode;
@@ -23959,7 +24024,7 @@ void gc_heap::garbage_collect (int n)
     //reset the number of alloc contexts
     alloc_contexts_used = 0;
 
-    fix_allocation_contexts (TRUE);
+    fix_allocation_contexts (TRUE); // allocation context in Thread*, only process whose alloc_ptr belongs to this gc_heap
 #ifdef MULTIPLE_HEAPS
 #ifdef JOIN_STATS
     gc_t_join.start_ts(this);
@@ -24024,11 +24089,11 @@ void gc_heap::garbage_collect (int n)
                                                       &elevation_requested,
                                                       FALSE);
     gc_t_join.join(this, gc_join_generation_determined);
-    if (gc_t_join.joined())
+    if (gc_t_join.joined()) // 看我在joined上面的comment，joined()只有最后一个thread在restart之前为true，在restart里面reset到false，然后才wake其他threads
 #endif //MULTIPLE_HEAPS
     {
 #ifdef FEATURE_BASICFREEZE
-        seg_table->delete_old_slots();
+        seg_table->delete_old_slots();  // Q: 这是个啥？
 #endif //FEATURE_BASICFREEZE
 
 #ifdef MULTIPLE_HEAPS
@@ -24050,7 +24115,7 @@ void gc_heap::garbage_collect (int n)
             gc_heap* hp = g_heaps[i];
             // check for card table growth
             if (g_gc_card_table != hp->card_table)
-                hp->copy_brick_card_table();
+                hp->copy_brick_card_table();    // 对于region是不是不可能？A:应该是的，好像后面把这行删了
             hp->delay_free_segments();
         }
 #else //MULTIPLE_HEAPS
@@ -26152,7 +26217,7 @@ void gc_heap::add_to_promoted_bytes (uint8_t* object, size_t obj_size, int threa
     assert (thread == heap_number);
 
 #ifdef USE_REGIONS
-    if (survived_per_region)
+    if (survived_per_region) // 不知道后面多个heap怎么合并信息，如果多个heap扫root的时候并发了，这个数据可能不能直接相加，会有重复
     {
         survived_per_region[get_basic_region_index_for_address (object)] += obj_size;
     }
@@ -26219,6 +26284,7 @@ gc_heap* gc_heap::heap_of_gc (uint8_t* o)
 //
 // If you need it to be stricter, eg if you only want to find an object in ephemeral range,
 // you should make sure interior is within that range before calling this method.
+// 一开始的时候brick=-1所以要线性搜索，但是搜索的过程中把brick table设置成了对应brick中的highest obj从而提升了下次搜索该brick的性能
 uint8_t* gc_heap::find_object (uint8_t* interior)
 {
     assert (interior != 0);
@@ -26290,7 +26356,7 @@ uint8_t* gc_heap::find_object (uint8_t* interior)
 
 #ifdef MULTIPLE_HEAPS
 
-#ifdef GC_CONFIG_DRIVEN
+#ifdef GC_CONFIG_DRIVEN // 如果把 mark_list_index++ 拿出来是不是会好一点，codegen也有可能有机会变成 conditional mov (目前codegen是 cond jump + add at both branch)
 #define m_boundary(o) {if (mark_list_index <= mark_list_end) {*mark_list_index = o;mark_list_index++;} else {mark_list_index++;}}
 #else //GC_CONFIG_DRIVEN
 #define m_boundary(o) {if (mark_list_index <= mark_list_end) {*mark_list_index = o;mark_list_index++;}}
@@ -26810,7 +26876,7 @@ uint8_t *mark_queue_t::queue_mark(uint8_t *o)
     uint8_t* old_o = slot_table[slot_index];
     slot_table[slot_index] = o;
 
-    curr_slot_index = (slot_index + 1) % slot_count;
+    curr_slot_index = (slot_index + 1) % slot_count;    // 哈哈，和我之前一个prefetch blob的做法一样。
     if (old_o == nullptr)
         return nullptr;
 #else //MARK_PHASE_PREFETCH
@@ -26901,6 +26967,7 @@ void mark_queue_t::verify_empty()
 #endif //MARK_PHASE_PREFETCH
 }
 
+// TODO
 void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL)
 {
     SERVER_SC_MARK_VOLATILE(uint8_t*)* mark_stack_tos = (SERVER_SC_MARK_VOLATILE(uint8_t*)*)mark_stack_array;
@@ -26933,7 +27000,7 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
         const int thread = 0;
 #endif //MULTIPLE_HEAPS
 
-        if (oo && ((size_t)oo != 4))
+        if (oo && ((size_t)oo != 4))    // == 4 是个什么情况？
         {
             size_t s = 0;
             if (stolen_p (oo))
@@ -27502,7 +27569,7 @@ gc_heap::mark_object_simple (uint8_t** po THREAD_NUMBER_DCL)
         {
             m_boundary (o);
             size_t s = size (o);
-            add_to_promoted_bytes (o, s, thread);
+            add_to_promoted_bytes (o, s, thread);   // 统计每个region的obj size总和
             {
                 go_through_object_cl (method_table(o), o, s, poo,
                                         {
@@ -29330,7 +29397,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
             mark_list_piece_end = &mark_list_piece_start[g_mark_list_piece_size];
 #endif //MULTIPLE_HEAPS
             survived_per_region = (size_t*)&g_mark_list_piece[heap_number * 2 * g_mark_list_piece_size];
-            old_card_survived_per_region = (size_t*)&survived_per_region[g_mark_list_piece_size];
+            old_card_survived_per_region = (size_t*)&survived_per_region[g_mark_list_piece_size];   // see: save_current_survived
             size_t region_info_to_clear = region_count * sizeof (size_t);
             memset (survived_per_region, 0, region_info_to_clear);
             memset (old_card_survived_per_region, 0, region_info_to_clear);
@@ -29466,6 +29533,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
             }
 #endif //HEAP_ANALYZE
 
+            // mark从比当前考虑的gen更高的gen指向lower gen的root，使用了card table+write barrier来记录那些ref有可能指向lower gen
 #if defined(MULTIPLE_HEAPS) && defined(FEATURE_CARD_MARKING_STEALING)
             if (!card_mark_done_soh)
 #endif // MULTIPLE_HEAPS && FEATURE_CARD_MARKING_STEALING
@@ -30051,7 +30119,7 @@ void set_gap_size (uint8_t* node, size_t size)
     assert ((size == 0 )||(size >= sizeof(plug_and_reloc)));
 
 }
-
+// 前序和插入顺序相同的一个二叉构建
 uint8_t* gc_heap::insert_node (uint8_t* new_node, size_t sequence_number,
                    uint8_t* tree, uint8_t* last_node)
 {
@@ -31809,7 +31877,7 @@ void gc_heap::grow_mark_list_piece()
     {
         delete[] g_mark_list_piece;
 
-        // at least double the size
+        // at least double the size // 最不是还可以 min(region_max_number)
         size_t alloc_count = max ((g_mark_list_piece_size * 2), region_count);
 
         // we need two arrays with alloc_count entries per heap
@@ -32248,7 +32316,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
     size_t  sequence_number = 0;
     uint8_t*  last_node = 0;
     size_t  current_brick = brick_of (x);
-    BOOL  allocate_in_condemned = ((condemned_gen_number == max_generation)||
+    BOOL  allocate_in_condemned = ((condemned_gen_number == max_generation)|| // 感觉是说是不是还allocate在原来的gen
                                    (settings.promotion == FALSE));
     int  active_old_gen_number = condemned_gen_number;
     int  active_new_gen_number = (allocate_in_condemned ? condemned_gen_number:
@@ -32477,7 +32545,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
     while (1)
     {
         if (x >= end)
-        {
+        { // 这一个region处理完了
             if (!use_mark_list)
             {
                 assert (x == end);
@@ -32630,12 +32698,12 @@ void gc_heap::plan_phase (int condemned_gen_number)
             uint8_t*  plug_start = x;
             uint8_t*  saved_plug_end = plug_end;
             BOOL   pinned_plug_p = FALSE;
-            BOOL   npin_before_pin_p = FALSE;
+            BOOL   npin_before_pin_p = FALSE; // 当前case是non-pin obj紧随pin obj
             BOOL   saved_last_npinned_plug_p = last_npinned_plug_p;
             uint8_t*  saved_last_object_in_plug = last_object_in_plug;
             BOOL   merge_with_last_pin_p = FALSE;
 
-            size_t added_pinning_size = 0;
+            size_t added_pinning_size = 0; // pin plug后面紧随的obj的size
             size_t artificial_pinned_size = 0;
 
             store_plug_gap_info (plug_start, plug_end, last_npinned_plug_p, last_pinned_plug_p,
@@ -32647,11 +32715,11 @@ void gc_heap::plan_phase (int condemned_gen_number)
             size_t alignmentOffset = OBJECT_ALIGNMENT_OFFSET;
 #endif // FEATURE_STRUCTALIGN
 
-            {
+            { // 判定当前plug的范围，处理了pin的几种case，包括对于pin后紧随non-pin的时候扩展plug
                 uint8_t* xl = x;
                 while ((xl < end) && marked (xl) && (pinned (xl) == pinned_plug_p))
                 {
-                    assert (xl < end);
+                    assert (xl < end); // 逗小孩的assert吗
                     if (pinned(xl))
                     {
                         clear_pinned (xl);
@@ -32672,7 +32740,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
                     dprintf(4, ("+%zx+", (size_t)xl));
                     assert ((size (xl) > 0));
-                    assert ((size (xl) <= loh_size_threshold));
+                    assert ((size (xl) <= loh_size_threshold)); // TODO: 奇怪，什么时候排除了condemend==2的可能性？
 
                     last_object_in_plug = xl;
 
@@ -32713,7 +32781,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
             uint8_t*  new_address = 0;
 
             if (!pinned_plug_p)
-            {
+            { // TODO
                 if (allocate_in_condemned &&
                     (settings.condemned_generation == max_generation) &&
                     (ps > OS_PAGE_SIZE))
@@ -32995,7 +33063,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
         {
             dprintf (3, ("more than %zd pinned plugs in this plug", num_pinned_plugs_in_plug));
         }
-
+// （好像并行mark的时候mark list可能有重复项）+前面计算plug的时候是用size走的，这里可能会拿到已经clear的obj,但是上面计算plug的时候有marked的check所以没有问题
         x = find_next_marked (x, end, use_mark_list, mark_list_next, mark_list_index);
     }
 
@@ -34646,7 +34714,7 @@ void gc_heap::update_start_tail_regions (generation* gen,
 // This new region we get needs to be temporarily recorded instead of being on the free_regions list because
 // we can't use it for other purposes.
 inline
-bool gc_heap::should_sweep_in_plan (heap_segment* region)
+bool gc_heap::should_sweep_in_plan (heap_segment* region) // PR#52187
 {
     if (!enable_special_regions_p)
     {
@@ -35344,7 +35412,7 @@ void gc_heap::make_unused_array (uint8_t* x, size_t size, BOOL clearp, BOOL rese
 #if BIGENDIAN
 #error "This won't work on big endian platforms"
 #endif
-
+    // 上面SetFree写入的是一个size_t已经把下面的这些空间覆盖了，不知道这些obj会不会被直接使用，但是free list计算的时候是通过第一个size_t把这些空间考虑了的。
     size_t size_as_object = (uint32_t)(size - free_object_base_size) + free_object_base_size;
 
     if (size_as_object < size)
@@ -37174,7 +37242,7 @@ void gc_heap::gc_thread_stub (void* arg)
 
     // server GC threads run at a higher priority than normal.
     GCToOSInterface::BoostThreadPriority();
-    void* tmp = _alloca (256*heap->heap_number);
+    void* tmp = _alloca (256*heap->heap_number);    // for what?
     heap->gc_thread_function();
 }
 #ifdef _MSC_VER
@@ -40648,6 +40716,9 @@ void gc_heap::fix_brick_to_highest (uint8_t* o, uint8_t* next_o)
 }
 
 // start can not be >= heap_segment_allocated for the segment.
+// 接受未处理的brick(-1)，但是过程中也对brick就行了一定的处理，比如把搜索范围内的brick设置为内部的最高obj addr
+// 设置成highest不是lowest是不是为了兼容正常的brick?因为这个会处理gen0/1/2，而gen1/2的brick应该是没有clean的
+// find object contains start, 要求start>=first_object
 uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
 {
     size_t brick = brick_of (start);
@@ -40705,11 +40776,15 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
             Prefetch (next_o);
         }while (next_o < next_b);
 
+        /*
+        1. o <= start < next_o
+        2. o < next_brick_start <= next_o
+        */
         if (((size_t)next_o / brick_size) != curr_cl)
         {
             if (curr_cl >= min_cl)
             {
-                fix_brick_to_highest (o, next_o);
+                fix_brick_to_highest (o, next_o); // 让brick指向o，即当前brick中的最高obj
             }
             curr_cl = (size_t) next_o / brick_size;
         }
@@ -40832,7 +40907,7 @@ BOOL gc_heap::find_card_dword (size_t& cardw, size_t cardw_end)
 //                              As output, the first card that's set.
 //     card_word_end : The card word at which to stop looking.
 //     end_card      : [out] The last card which is set.
-BOOL gc_heap::find_card(uint32_t* card_table,
+BOOL gc_heap::find_card(uint32_t* card_table,   // search [card, card_word_end*32)
                         size_t&   card,
                         size_t    card_word_end,
                         size_t&   end_card)
@@ -40998,7 +41073,7 @@ gc_heap::mark_through_cards_helper (uint8_t** poo, size_t& n_gen,
     assert (next_boundary == 0);
     uint8_t* child_object = *poo;
     if ((child_object < ephemeral_low) || (ephemeral_high <= child_object))
-        return;
+        return; // gen0/1
 
     int child_object_gen = get_region_gen_num (child_object);
     int saved_child_object_gen = child_object_gen;
@@ -41057,7 +41132,7 @@ gc_heap::mark_through_cards_helper (uint8_t** poo, size_t& n_gen,
     }
 #endif //USE_REGIONS
 }
-
+// 因为每次处理的是一段连续的card，如果po越过了这一段card，处理读取出下一段card范围
 BOOL gc_heap::card_transition (uint8_t* po, uint8_t* end, size_t card_word_end,
                                size_t& cg_pointers_found,
                                size_t& n_eph, size_t& n_card_set,
@@ -41222,6 +41297,8 @@ bool gc_heap::find_next_chunk(card_marking_enumerator& card_mark_enumerator, hea
 }
 #endif // FEATURE_CARD_MARKING_STEALING
 
+// 看这个代码要注意的一些事：
+// 1. 这个扫card table的同时也做了一件很重要的事情是更新card table的数据，如果没有cross gen的ref就会把card table reset。可能是为了后面relocate之类的时候加速？
 void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_MARKING_STEALING_ARG(gc_heap* hpt))
 {
 #ifdef BACKGROUND_GC
@@ -41250,7 +41327,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
 
     size_t end_card = 0;
 
-    generation*   oldest_gen        = generation_of (max_generation);
+    generation*   oldest_gen        = generation_of (max_generation); // 后面会younger的gen迭代。Q: poh,loh? A: mark_through_cards_for_uoh_objects
     int           curr_gen_number   = max_generation;
     // Note - condemned_gen is only needed for regions and the other 2 are
     // only for if USE_REGIONS is not defined, but I need to pass them to a
@@ -41281,13 +41358,13 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
 
     size_t  card_word_end = (card_of (align_on_card_word (end)) / card_word_width);
 
-    size_t        n_eph             = 0;
-    size_t        n_gen             = 0;
+    size_t        n_eph             = 0; // 有多少ptr指向lower gen的
+    size_t        n_gen             = 0; // 有多少ptr指向<=condemn_gen的
     size_t        n_card_set        = 0;
 
     BOOL          foundp            = FALSE;
-    uint8_t*      start_address     = 0;
-    uint8_t*      limit             = 0;
+    uint8_t*      start_address     = 0; // 当前card的start
+    uint8_t*      limit             = 0; // 当前card限定的limit
     size_t        card              = card_of (beg);
 #ifdef BACKGROUND_GC
     BOOL consider_bgc_mark_p        = FALSE;
@@ -41305,7 +41382,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
 #endif // FEATURE_CARD_MARKING_STEALING
 
     while (1)
-    {
+    {   // 感觉下面uoh的func里面对应的判断条件写的更清楚一点，可以先看那边。而且没有find_first_object干扰。
         if (card_of(last_object) > card)
         {
             dprintf (3, ("Found %zd cg pointers", cg_pointers_found));
@@ -41344,7 +41421,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
         if (!foundp || (last_object >= end) || (card_address (card) >= end))
         {
             if (foundp && (cg_pointers_found == 0))
-            {
+            { // 如果扫描完发现并没有obj就clear card
 #ifndef USE_REGIONS
                 // in the segment case, need to recompute end_card so we don't clear cards
                 // for the next generation
@@ -41362,7 +41439,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
             // we have decided to move to the next segment - make sure we exhaust the chunk enumerator for this segment
             card_mark_enumerator.exhaust_segment(seg);
 #endif // FEATURE_CARD_MARKING_STEALING
-
+            // 搜索下一个region
             seg = heap_segment_next_in_range (seg);
 #ifdef USE_REGIONS
             if (!seg)
@@ -41467,7 +41544,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
                 if (is_collectible(o))
                 {
                     BOOL passed_end_card_p = FALSE;
-
+// 我一开始读到这里的时候总怀疑这个和下面if里的card_of==的必要性，是不是有些可以优化的.但是想了下，主要的情况是如果一个obj跨多个card, start没有被set, 但是mid被set了就是一个case
                     if (card_of (o) > card)
                     {
                         passed_end_card_p = card_transition (o, end, card_word_end,
@@ -41479,7 +41556,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
                             CARD_MARKING_STEALING_ARGS(card_mark_enumerator, seg, card_word_end));
                     }
 
-                    if ((!passed_end_card_p || foundp) && (card_of (o) == card))
+                    if ((!passed_end_card_p || foundp) && (card_of (o) == card)) // 第二个等于是因为mt的addr就是o，所以看看mt被card cover了吗？
                     {
                         // card is valid and it covers the head of the object
                         if (fn == &gc_heap::relocate_address)
@@ -41503,7 +41580,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
                             goto go_through_refs;
                         }
                         else if (foundp && (start_address < limit))
-                        {
+                        { // 第二个小于是考虑了什么情况，难道不应该恒成立吗？还是说end==start_address?
                             cont_o = find_first_object (start_address, o);
                             goto end_object;
                         }
@@ -41532,7 +41609,7 @@ go_through_refs:
                                             card_word_end,
                                             cg_pointers_found,
                                             n_eph, n_card_set,
-                                            card, end_card,
+                                            card, end_card, // [car, end_card)
                                             foundp, start_address,
                                             limit, total_cards_cleared
                                             CARD_MARKING_STEALING_ARGS(card_mark_enumerator, seg, card_word_end));
@@ -44687,12 +44764,13 @@ bool gc_heap::check_against_hard_limit (size_t space_required)
 }
 
 #ifdef USE_REGIONS
+// TODO
 bool gc_heap::sufficient_space_regions_for_allocation (size_t end_space, size_t end_space_required)
 {
     // REGIONS PERF TODO: we can repurpose large regions here too, if needed.
     size_t free_regions_space = (free_regions[basic_free_region].get_num_free_regions() * ((size_t)1 << min_segment_size_shr)) +
                                 global_region_allocator.get_free();
-    size_t total_alloc_space = end_space + free_regions_space;
+    size_t total_alloc_space = end_space + free_regions_space;  // 这个似乎是reserved，空间非常之大
     dprintf (REGIONS_LOG, ("h%d required %zd, end %zd + free %zd=%zd",
         heap_number, end_space_required, end_space, free_regions_space, total_alloc_space));
     size_t total_commit_space = end_gen0_region_committed_space + free_regions[basic_free_region].get_size_committed_in_free();
@@ -44940,7 +45018,7 @@ CObjectHeader* gc_heap::allocate_uoh_object (size_t jsize, uint32_t flags, int g
 #ifdef FEATURE_LOH_COMPACTION
     if (gen_number == loh_generation)
     {
-        pad = Align (loh_padding_obj_size, align_const);
+        pad = Align (loh_padding_obj_size, align_const);    // 这个pad的作用？
     }
 #endif //FEATURE_LOH_COMPACTION
 
@@ -44964,7 +45042,7 @@ CObjectHeader* gc_heap::allocate_uoh_object (size_t jsize, uint32_t flags, int g
 
     uint8_t*  result = acontext.alloc_ptr;
 
-    assert ((size_t)(acontext.alloc_limit - acontext.alloc_ptr) == size);
+    assert ((size_t)(acontext.alloc_limit - acontext.alloc_ptr) == size);   // 上面alloc是 size + pad 但是这里却不是 size + pad？说明allocate_more_space里面的逻辑移除了pad？
     alloc_bytes += size;
 
     CObjectHeader* obj = (CObjectHeader*)result;
@@ -46358,6 +46436,7 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
     dprintf(3, ("CMl: %zx->%zx", (size_t)beg, (size_t)end));
     while (1)
     {
+        // o < end是不是用来判断o == end的end条件？
         if ((o < end) && (card_of(o) > card))
         {
             dprintf (3, ("Found %zd cg pointers", cg_pointers_found));
@@ -46375,6 +46454,7 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
             cg_pointers_found = 0;
             card = card_of ((uint8_t*)o);
         }
+        // to be proof: assert: if o < end then card == card_of(o)
         if ((o < end) &&(card >= end_card))
         {
 #ifdef FEATURE_CARD_MARKING_STEALING
@@ -47881,7 +47961,7 @@ void gc_heap::verify_heap (BOOL begin_gc_p)
 #endif //!USE_REGIONS
 
 #ifdef USE_REGIONS
-                if (verify_bricks_p && curr_gen_num != 0)
+                if (verify_bricks_p && curr_gen_num != 0)   // 因为gen0的brick在GC之前是不维护的吗？
 #else
                 // If object is not in the youngest generation, then lets
                 // verify that the brick table is correct....
@@ -47903,10 +47983,10 @@ void gc_heap::verify_heap (BOOL begin_gc_p)
                     if (curr_brick != prev_brick)
                     {
                         // If the last brick we were examining had positive
-                        // entry but we never found the matching object, then
+                        // entry but we never found the matching object, then // 如果没找到brick对应的root obj
                         // we have a problem
                         // If prev_brick was the last one of the segment
-                        // it's ok for it to be invalid because it is never looked at
+                        // it's ok for it to be invalid because it is never looked at // 怎么理解这个never
                         if (bCurrentBrickInvalid &&
                             (curr_brick != brick_of (heap_segment_mem (seg))) &&
                             !heap_segment_read_only_p (seg))
@@ -47960,7 +48040,7 @@ void gc_heap::verify_heap (BOOL begin_gc_p)
                                 bCurrentBrickInvalid = FALSE;
                             }
                             else if (!heap_segment_read_only_p (seg))
-                            {
+                            {   // 是这样的，brick是否valid要看brick是否指向了这个brick中的root obj，所以先mark成invalid，上面的if找到了root obj的时候就mark会valid
                                 bCurrentBrickInvalid = TRUE;
                             }
                         }
@@ -48309,7 +48389,7 @@ HRESULT GCHeap::Initialize()
         gc_heap::total_physical_mem = GCToOSInterface::GetPhysicalMemoryLimit (&gc_heap::is_restricted_physical_mem);
     }
     memset (gc_heap::committed_by_oh, 0, sizeof (gc_heap::committed_by_oh));
-    if (!gc_heap::compute_hard_limit())     // 根据config就算各种limit
+    if (!gc_heap::compute_hard_limit())     // 根据config计算各种limit
     {
         return CLR_E_GC_BAD_HARD_LIMIT;
     }
@@ -49063,7 +49143,7 @@ void GCHeap::Promote(Object** ppObject, ScanContext* sc, uint32_t flags)
     // For conservative GC, a value on stack may point to middle of a free object.
     // In this case, we don't need to promote the pointer.
     if (GCConfig::GetConservativeGC()
-        && ((CObjectHeader*)o)->IsFree())
+        && ((CObjectHeader*)o)->IsFree())   // 是不是对于 conservative 都是 interior?
     {
         return;
     }
@@ -49076,7 +49156,7 @@ void GCHeap::Promote(Object** ppObject, ScanContext* sc, uint32_t flags)
 #endif //_DEBUG
 
     if (flags & GC_CALL_PINNED)
-        hp->pin_object (o, (uint8_t**) ppObject);
+        hp->pin_object (o, (uint8_t**) ppObject); // inc counter, set bit in object header
 
 #ifdef STRESS_PINNING
     if ((++n_promote % 20) == 1)
@@ -49445,7 +49525,7 @@ GCHeap::Alloc(gc_alloc_context* context, size_t size, uint32_t flags REQD_ALIGN_
         AssignHeap (acontext);
         assert (acontext->get_alloc_heap());
     }
-    gc_heap* hp = acontext->get_alloc_heap()->pGenGCHeap;
+    gc_heap* hp = acontext->get_alloc_heap()->pGenGCHeap; // 可不可以把alloc_heap直接存成gc_heap?
 #else
     gc_heap* hp = pGenGCHeap;
 #ifdef _PREFAST_
@@ -49526,7 +49606,7 @@ GCHeap::Alloc(gc_alloc_context* context, size_t size, uint32_t flags REQD_ALIGN_
 }
 
 void
-GCHeap::FixAllocContext (gc_alloc_context* context, void* arg, void *heap)
+GCHeap::FixAllocContext (gc_alloc_context* context, void* arg /*for_gc_p*/, void *heap)
 {
     alloc_context* acontext = static_cast<alloc_context*>(context);
 #ifdef MULTIPLE_HEAPS
@@ -49541,6 +49621,7 @@ GCHeap::FixAllocContext (gc_alloc_context* context, void* arg, void *heap)
 
     // The acontext->alloc_heap can be out of sync with the ptrs because
     // of heap re-assignment in allocate
+    // Q: which line?
     gc_heap* hp = gc_heap::heap_of (alloc_ptr);
 #else
     gc_heap* hp = pGenGCHeap;
@@ -50456,6 +50537,9 @@ unsigned GCHeap::GetGcCount()
     return (unsigned int)VolatileLoad(&pGenGCHeap->settings.gc_index);
 }
 
+/*
+对于 multiple heap, 这里只是set了ee_suspend_event，从而唤醒heap0的gc thread
+*/
 size_t
 GCHeap::GarbageCollectGeneration (unsigned int gen, gc_reason reason)
 {
@@ -50468,7 +50552,7 @@ GCHeap::GarbageCollectGeneration (unsigned int gen, gc_reason reason)
 #endif //COMMITTED_BYTES_SHADOW
 
 #ifdef MULTIPLE_HEAPS
-    gc_heap* hpt = gc_heap::g_heaps[0];
+    gc_heap* hpt = gc_heap::g_heaps[0]; // 这个 [0] 是因为GC是对所有heap一同而言的吗？那这些不可以放到static里面去吗？
 #else
     gc_heap* hpt = 0;
 #endif //MULTIPLE_HEAPS
@@ -50476,7 +50560,7 @@ GCHeap::GarbageCollectGeneration (unsigned int gen, gc_reason reason)
     dynamic_data* dd = hpt->dynamic_data_of (gen);
     size_t localCount = dd_collection_count (dd);
 
-    enter_spin_lock (&gc_heap::gc_lock);
+    enter_spin_lock (&gc_heap::gc_lock);    // MutipleHeap: 会由heap0 gc thread unlock, search "GC Lgc"
     dprintf (SPINLOCK_LOG, ("GC Egc"));
     ASSERT_HOLDING_SPIN_LOCK(&gc_heap::gc_lock);
 
@@ -50493,6 +50577,7 @@ GCHeap::GarbageCollectGeneration (unsigned int gen, gc_reason reason)
             dprintf (SPINLOCK_LOG, ("no need GC Lgc"));
             leave_spin_lock (&gc_heap::gc_lock);
 
+            // 这个指的是什么？至少从trigger_gc_for_alloc进来的时候已经release msl了呀
             // We don't need to release msl here 'cause this means a GC
             // has happened and would have release all msl's.
             return col_count;
@@ -50733,7 +50818,7 @@ size_t GCHeap::ApproxTotalBytesInUse(BOOL small_heap_only)
 #ifdef MULTIPLE_HEAPS
 void GCHeap::AssignHeap (alloc_context* acontext)
 {
-    // Assign heap based on processor
+    // Assign heap based on processor, Q: 如果thread切换到其他CPU上去了呢？
     acontext->set_alloc_heap(GetHeap(heap_select::select_heap(acontext)));
     acontext->set_home_heap(acontext->get_alloc_heap());
 }

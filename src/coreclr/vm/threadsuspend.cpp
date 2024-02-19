@@ -1876,7 +1876,7 @@ void ThreadSuspend::LockThreadStore(ThreadSuspend::SUSPEND_REASON reason)
         // to loop forever because it needs to see all threads in preemptive mode.
         BOOL toggleGC = (pCurThread != NULL && pCurThread->PreemptiveGCDisabled());
         if (toggleGC)
-            pCurThread->EnablePreemptiveGC();
+            pCurThread->EnablePreemptiveGC();   // 别的进抢占的方式不都是 oldState = enter preemptive 之类的吗？为啥这里不用记录 old state?
 
         LOG((LF_SYNC, INFO3, "Locking thread store\n"));
 
@@ -5695,7 +5695,7 @@ retry_for_debugger:
     //
     // Acquire the TSL.  We will hold this until the we restart the EE.
     //
-    ThreadSuspend::LockThreadStore(reason);
+    ThreadSuspend::LockThreadStore(reason); // 最关键的是进入一个 CRST
 
 #ifdef TIME_SUSPEND
     g_SuspendStatistics.acquireTSL.Accumulate(SuspendStatistics::GetElapsed(startAcquire,

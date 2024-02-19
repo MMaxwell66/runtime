@@ -11,6 +11,9 @@
 **
 **
 ===========================================================*/
+
+// TODO what happens if we load an asembly multiple time, e.g., by useing AssemblyLoadContext, what happens to Module, DomainAssembly etc
+
 #ifndef _ASSEMBLY_H
 #define _ASSEMBLY_H
 

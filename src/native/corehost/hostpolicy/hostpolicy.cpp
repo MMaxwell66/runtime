@@ -246,7 +246,7 @@ int run_app_for_context(
     trace::flush();
 
     // Execute the application
-    unsigned int exit_code;
+    unsigned int exit_code; // 在 execute_assembly 里面，如果entry point返回void，设为0，否则为返回值。但是shutdown里面会返回的是latchedExitCode，见 ceemain.cpp#LatchedExitCode
     auto hr = context.coreclr->execute_assembly(
         (int32_t)argv_local.size(),
         argv_local.data(),

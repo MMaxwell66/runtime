@@ -923,9 +923,9 @@ void EEStartupHelper()  // 发生的一些 non-trial 的步骤: 1. load config (
 #endif // PROFILING_SUPPORTED
 
         g_fEEInit = false;
-
+        // no-op as we already loaded?
         SystemDomain::System()->DefaultDomain()->LoadSystemAssemblies();
-
+        // Create string.Empty here!!
         SystemDomain::System()->DefaultDomain()->SetupSharedStatics();
 
 #ifdef FEATURE_MINIMETADATA_IN_TRIAGEDUMPS

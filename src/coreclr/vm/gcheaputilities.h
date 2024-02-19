@@ -123,6 +123,7 @@ public:
 #endif // FEATURE_SVR_GC
     }
 
+    // ServerGC or #CPU != 1 or EnabledCpuGroup
     static bool UseThreadAllocationContexts()
     {
         return s_useThreadAllocationContexts;

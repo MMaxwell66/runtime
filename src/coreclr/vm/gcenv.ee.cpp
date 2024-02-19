@@ -151,7 +151,7 @@ static void ScanStackRoots(Thread * pThread, promote_func* fn, ScanContext* sc)
             for (walk = topStack; walk < bottomStack; walk ++)
             {
                 if (((void*)*walk > (void*)bottomStack || (void*)*walk < (void*)topStack) &&
-                    ((void*)*walk >= (void*)g_lowest_address && (void*)*walk <= (void*)g_highest_address)
+                    ((void*)*walk >= (void*)g_lowest_address && (void*)*walk <= (void*)g_highest_address) // 感觉有后面就够了，stack不会在gc region内吧
                     )
                 {
                     //DbgPrintf("promote " FMT_ADDR " : " FMT_ADDR "\n", walk, *walk);

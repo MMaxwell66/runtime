@@ -1645,7 +1645,7 @@ void Module::FreeModuleIndex(ModuleIndex index)
     g_pModuleIndexDispenser->DisposeId((DWORD)val);
 }
 
-
+// TODO
 void Module::AllocateRegularStaticHandles(AppDomain* pDomain)
 {
     CONTRACTL

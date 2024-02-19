@@ -3206,6 +3206,7 @@ public:
     class MethodIterator
     {
     public:
+        // TODO: 这里初始化了两个东西：一个是method数量，这个还好；第二个比较麻烦的是MethodData，这个好像能从cache中获取，但是第一次会得到一个只初始化了数量的data空间，具体数据没有初始化。
         MethodIterator(MethodTable *pMT);
         MethodIterator(MethodTable *pMTDecl, MethodTable *pMTImpl);
         MethodIterator(MethodData *pMethodData);
@@ -3242,7 +3243,7 @@ public:
     // This includes new static methods, new non-virtual methods, and any overrides
     // of the parent's virtual methods. It does not include virtual method implementations
     // provided by the parent
-
+    // 这个Iterator只会访问MethodDef里面那些，也就是那些定义在这个class上面的实现
     class IntroducedMethodIterator
     {
     public:

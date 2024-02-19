@@ -1146,6 +1146,8 @@ void SystemDomain::Init()
     m_BaseLibrary.Append(g_pwBaseLibrary); // NOTE(JJ): System.Private.CoreLib.dll
     m_BaseLibrary.Normalize();
 
+    // Here inside, the `CastCache::Initialize` allocate the first object in the runtime 🎉🎉🎉
+    // fine, seems like the first object is allocate inside `AllocateRegularStaticHandles`, but CastCache is the first small object
     LoadBaseSystemClasses();
 
     {
@@ -1354,6 +1356,7 @@ void SystemDomain::LoadBaseSystemClasses()
 
         // further loading of nonprimitive types may need casting support.
         // initialize cast cache here.
+        // TODO: this allocate the first object in the runtime, be sure to take a look
         CastCache::Initialize();
         ECall::PopulateManagedCastHelpers();
 

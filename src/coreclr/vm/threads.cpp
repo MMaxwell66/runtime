@@ -5224,6 +5224,7 @@ void ThreadStore::AddThread(Thread *newThread)
     BOOL lockHeld = newThread->HasThreadStateNC(Thread::TSNC_TSLTakenForStartup);
     _ASSERTE(!lockHeld || (lockHeld && ThreadStore::HoldingThreadStore()));
 
+    // 这个lock好像是和suspend ee相同的？这两个使用场景下的区别是什么？这里会suspend其他的thread吗？
     ThreadStoreLockHolder TSLockHolder(!lockHeld);
 
     s_pThreadStore->m_ThreadList.InsertTail(newThread);
