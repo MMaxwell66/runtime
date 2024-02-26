@@ -7538,8 +7538,8 @@ void gc_heap::virtual_free (void* add, size_t allocated_size, heap_segment* sg)
 class mark
 {
 public:
-    uint8_t* first;
-    size_t len;
+    uint8_t* first; // pin plug start
+    size_t len; // pin plug len
 
     // If we want to save space we can have a pool of plug_and_gap's instead of
     // always having 2 allocated for each pinned plug.
@@ -7558,11 +7558,11 @@ public:
     // We need to calculate this after we are done with plan phase and before compact
     // phase because compact phase will change the bricks so relocate_address will no
     // longer work.
-    uint8_t* saved_pre_plug_info_reloc_start;
+    uint8_t* saved_pre_plug_info_reloc_start; // 没有skew的overwrite的目的地址
 
     // We need to save this because we will have no way to calculate it, unlike the
     // pre plug info start which is right before this plug.
-    uint8_t* saved_post_plug_info_start;
+    uint8_t* saved_post_plug_info_start; // post overwrite start原始地址。说不能算的原因是什么？不是可以根据plug_end算出来的吗？
 
 #ifdef SHORT_PLUGS
     uint8_t* allocation_context_start_region;
@@ -7570,7 +7570,7 @@ public:
 
     // How the bits in these bytes are organized:
     // MSB --> LSB
-    // bit to indicate whether it's a short obj | 3 bits for refs in this short obj | 2 unused bits | bit to indicate if it's collectible | last bit
+    // bit to indicate whether it's a short obj | 4 bits for refs in this short obj | 2 unused bits | bit to indicate if it's collectible | last bit
     // last bit indicates if there's pre or post info associated with this plug. If it's not set all other bits will be 0.
     BOOL saved_pre_p;
     BOOL saved_post_p;
@@ -8209,7 +8209,7 @@ size_t& pinned_len (mark* m)
 inline
 void set_new_pin_info (mark* m, uint8_t* pin_free_space_start)
 {
-    m->len = pinned_plug (m) - pin_free_space_start;
+    m->len = pinned_plug (m) - pin_free_space_start; // ? first不用改？还是说只是给update_planned_gen0_free_space用的？名字很迷惑
 #ifdef SHORT_PLUGS
     m->allocation_context_start_region = pin_free_space_start;
 #endif //SHORT_PLUGS
@@ -8304,6 +8304,7 @@ void gc_heap::set_allocator_next_pin (generation* gen)
             (plug <  generation_allocation_limit (gen)))
         {
 #ifdef USE_REGIONS
+// TODO: 这个assert很强啊，不知道对应什么case。猜测：是不是assert的是limit是region_end?但是allocate_in_condemned_generations里面limit是设为了plan_allocated呀。可能找找例子会比较好。
             assert (region_of (generation_allocation_pointer (gen)) ==
                     region_of (generation_allocation_limit (gen) - 1));
 #endif //USE_REGIONS
@@ -8439,7 +8440,7 @@ bool gc_heap::should_check_brick_for_reloc (uint8_t* o)
 
     size_t skewed_basic_region_index = get_skewed_basic_region_index_for_address (o);
 
-    // return true if the region is not SIP and the generation is <= condemned generation
+    // return true if the region is not SIP and the generation is <= condemned generation // 这第二个check的必要性？调用者前面已经check过了is_in_gc_range
     return (map_region_to_generation_skewed[skewed_basic_region_index] & (RI_SIP|RI_GEN_MASK)) <= settings.condemned_generation;
 }
 #endif //USE_REGIONS
@@ -12188,7 +12189,7 @@ void gc_heap::set_region_plan_gen_num (heap_segment* region, int plan_gen_num, b
         ((plan_gen_num < supposed_plan_gen_num) ? "DEMOTED" : "ND")));
     region_info region_info_bits_to_set = (region_info)(plan_gen_num << RI_PLAN_GEN_SHR);
     if ((plan_gen_num < supposed_plan_gen_num) && (heap_segment_pinned_survived (region) != 0))
-    {
+    { // TBC: 尚不确定demoted的明确目的，但是有一个涉及到的是card, 如果有一个region没有promote，那么card table要被设置
         if (!settings.demotion)
         {
             settings.demotion = TRUE;
@@ -15445,7 +15446,7 @@ void gc_heap::shutdown_gc()
     GCToOSInterface::Shutdown();
 }
 
-inline
+inline // front pad和tail pad都是一个obj，如果没有pad front那么当恰好fit时tail pad可以没有
 BOOL gc_heap::size_fit_p (size_t size REQD_ALIGN_AND_OFFSET_DCL, uint8_t* alloc_pointer, uint8_t* alloc_limit,
                           uint8_t* old_loc, int use_padding)
 {
@@ -16812,7 +16813,7 @@ void gc_heap::adjust_limit_clr (uint8_t* start, size_t limit_size, size_t size,
     {
         uint8_t*  hole = acontext->alloc_ptr;
         if (hole != 0)
-        {
+        {   // Example?
             size_t  ac_size = (acontext->alloc_limit - acontext->alloc_ptr);
             dprintf (3, ("filling up hole [%zx, %zx[", (size_t)hole, (size_t)hole + ac_size + aligned_min_obj_size));
             // when we are finishing an allocation from a free list
@@ -19028,7 +19029,7 @@ allocation_state gc_heap::try_allocate_more_space (alloc_context* acontext, size
         return a_state_retry_allocate;
     }
 
-    bool loh_p = (gen_number > 0);
+    bool loh_p = (gen_number > 0);  // 不会有gen1, gen2吗？
     GCSpinLock* msl = loh_p ? &more_space_lock_uoh : &more_space_lock_soh;  // per heap lock
 
 #ifdef SYNCHRONIZATION_STATS
@@ -20092,7 +20093,7 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
         }
         while (seg != ephemeral_heap_segment)
 #endif //USE_REGIONS
-        {
+        { // free list没有了，在一个个region尾部去找空间
             if (size_fit_p(size REQD_ALIGN_AND_OFFSET_ARG, heap_segment_plan_allocated (seg),
                            heap_segment_committed (seg), old_loc, USE_PADDING_TAIL | pad_in_front))
             {
@@ -20106,7 +20107,7 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
                 goto finished;
             }
             else
-            {
+            { // 有没有说法先找遍所有region的commit再尝试reserve?
                 if (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, heap_segment_plan_allocated (seg),
                                 heap_segment_reserved (seg), old_loc, USE_PADDING_TAIL | pad_in_front) &&
                     grow_heap_segment (seg, heap_segment_plan_allocated (seg), old_loc, size, pad_in_front REQD_ALIGN_AND_OFFSET_ARG))
@@ -20202,11 +20203,11 @@ finished:
         generation_allocation_pointer (gen) += size + pad;
         assert (generation_allocation_pointer (gen) <= generation_allocation_limit (gen));
 
-        generation_free_obj_space (gen) += pad;
+        generation_free_obj_space (gen) += pad; // pad对应的obj mt还没设置过，是要compact的时候放吗？
 
         if (generation_allocate_end_seg_p (gen))
         {
-            generation_end_seg_allocated (gen) += size;
+            generation_end_seg_allocated (gen) += size; // 这里没有记录pad
         }
         else
         {
@@ -20222,7 +20223,7 @@ finished:
 
             generation_last_free_list_allocated (gen) = old_loc;
 #endif //DOUBLY_LINKED_FL
-
+// plan_phase里面到时有assert older的acontext一开始为空，但是什么时候置空的？
             generation_free_list_allocated (gen) += size;
         }
         generation_allocation_size (gen) += size;
@@ -20560,7 +20561,7 @@ heap_segment* gc_heap::get_next_alloc_seg (generation* gen)
     {
         dprintf (REGIONS_LOG, ("init allocate region for gen%d to %p(%d)",
             gen->gen_num, heap_segment_mem (region), heap_segment_gen_num (region)));
-        init_alloc_info (gen, region);
+        init_alloc_info (gen, region); // 嗯，也就是说region的gen_num有可能<gen...
     }
 
     return region;
@@ -20568,13 +20569,14 @@ heap_segment* gc_heap::get_next_alloc_seg (generation* gen)
     return generation_allocation_segment (gen);
 #endif //USE_REGIONS
 }
-
+// 这里的可用空间是通过如下逻辑查找：从region头按顺序开始，找到下一个pin plug, pin plug前面这段空间就是可用的。猜测思路是我们按顺序plan，前面的plug已经被reloc了，后面的plug的位置不会超过自己原来的位置。
+// 有一个有问题的点是判断空间是否够用的size_fit_p会考虑padding的事情，这个额外的pad会不会导致上面关于plug reloc不会超过之前的位置这个assert失败？感觉有个pad有可能就是gap？所以不会出问题？有需要可以debug一下看看。
 uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen,
                                                   size_t size,
                                                   int from_gen_number,
 #ifdef SHORT_PLUGS
                                                   BOOL* convert_to_pinned_p,
-                                                  uint8_t* next_pinned_plug,
+                                                  uint8_t* next_pinned_plug, // 当前是non-pin，下一个紧随的pin obj addr
                                                   heap_segment* current_seg,
 #endif //SHORT_PLUGS
                                                   uint8_t* old_loc
@@ -20606,7 +20608,7 @@ uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen,
 #endif //SHORT_PLUGS
 
     if ((from_gen_number != -1) && (from_gen_number != (int)max_generation) && settings.promotion)
-    {
+    { // 这几个记录在older gen的目的是？
         generation_condemned_allocated (generation_of (from_gen_number + (settings.promotion ? 1 : 0))) += size;
         generation_allocation_size (generation_of (from_gen_number + (settings.promotion ? 1 : 0))) += size;
     }
@@ -20616,12 +20618,13 @@ retry:
         if (! (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, generation_allocation_pointer (gen),
                            generation_allocation_limit (gen), old_loc,
                            ((generation_allocation_limit (gen) != heap_segment_plan_allocated (seg))?USE_PADDING_TAIL:0)|pad_in_front)))
-        {
+        { // 感觉是在当前gen的开头开始找空间，跳过pin plug。因为plan的时候是从头开始plan的，所以肯定能够找到空间（最差就是原地不动）等下，前提是没有pad front/tail，这个下面的fit代码要看一下
+          // 好像确实有点风险的感觉，就以下面的if为例，它会直接retry，如果retry因为上面的padding还是没有成功，就有风险了呀感觉。
             if ((! (pinned_plug_que_empty_p()) &&
                  (generation_allocation_limit (gen) ==
                   pinned_plug (oldest_pin()))))
             {
-                size_t entry = deque_pinned_plug();
+                size_t entry = deque_pinned_plug(); // 直接就deque了？我还没看相关代码，但是这里是不是存了artifact gap的拷贝数据来着？
                 mark* pinned_plug_entry = pinned_plug_of (entry);
                 size_t len = pinned_len (pinned_plug_entry);
                 uint8_t* plug = pinned_plug (pinned_plug_entry);
@@ -20651,11 +20654,11 @@ retry:
                     mark_stack_bos, mark_stack_tos, plug, len, pinned_len (pinned_plug_of (entry))));
 
                 assert(mark_stack_array[entry].len == 0 ||
-                       mark_stack_array[entry].len >= Align(min_obj_size));
+                       mark_stack_array[entry].len >= Align(min_obj_size)); // set_new_pin_info里能确保这个吗？
                 generation_allocation_pointer (gen) = plug + len;
                 generation_allocation_context_start_region (gen) = generation_allocation_pointer (gen);
                 generation_allocation_limit (gen) = heap_segment_plan_allocated (seg);
-                set_allocator_next_pin (gen);
+                set_allocator_next_pin (gen); // 这里面吧limit限制到了下一个pin obj，里面有个region的assert比较奇怪。
 
                 //Add the size of the pinned plug to the right pinned allocations
                 //find out which gen this pinned plug came from
@@ -20669,6 +20672,7 @@ retry:
                     // of a region after we've planned it. This means if the pinning plug is in the
                     // the same seg we are planning, we haven't set its plan_gen_num yet. So we
                     // need to check for that first.
+                    // 上面comment让我感觉我对这里可能的处理顺序还是有了解不清楚的地方，有空找些例子看看吧
                     int togn = (in_range_for_segment (plug, seg) ? to_gen_number : object_gennum_plan (plug));
 #else
                     int togn = object_gennum_plan (plug);
@@ -20739,7 +20743,7 @@ retry:
 #ifdef USE_REGIONS
                         set_region_plan_gen_num (seg, to_gen_number);
                         if ((next_seg == 0) && (heap_segment_gen_num (seg) > 0))
-                        {
+                        { // 怎么理解这个sync?
                             // We need to switch to a younger gen's segments so the allocate seg will be in
                             // sync with the pins.
                             next_seg = generation_start_segment (generation_of (heap_segment_gen_num (seg) - 1));
@@ -26622,7 +26626,7 @@ void gc_heap::enque_pinned_plug (uint8_t* plug,
                                  uint8_t* last_object_in_last_plug)
 {
     if (mark_stack_array_length <= mark_stack_tos)
-    {
+    { // 这个概率有多低？作为user应该不会预期runtime会在GC的时候因为这种原因fail导致整个程序退出吧，这个mark一个就0xa8，不小了吧。
         if (!grow_mark_stack (mark_stack_array, mark_stack_array_length, MARK_STACK_INITIAL_LENGTH))
         {
             // we don't want to continue here due to security
@@ -26682,7 +26686,7 @@ void gc_heap::enque_pinned_plug (uint8_t* plug,
                 dprintf (3, ("short object: %p(%zx)", last_object_in_last_plug, last_obj_size));
 
                 go_through_object_nostart (method_table(last_object_in_last_plug), last_object_in_last_plug, last_obj_size, pval,
-                    {
+                    { // 我们不能再saved_pre_plug里面去计算吗？为什么要提前算好？
                         size_t gap_offset = (((size_t)pval - (size_t)(plug - sizeof (gap_reloc_pair) - plug_skew))) / sizeof (uint8_t*);
                         dprintf (3, ("member: %p->%p, %zd ptrs from beginning of gap", (uint8_t*)pval, *pval, gap_offset));
                         m.set_pre_short_bit (gap_offset);
@@ -26729,7 +26733,7 @@ void gc_heap::save_post_plug_info (uint8_t* last_pinned_plug, uint8_t* last_obje
     dprintf (3, ("PP %p has NP %p right after", last_pinned_plug, post_plug));
 
     size_t last_obj_size = post_plug - last_object_in_last_plug;
-    if (last_obj_size < min_pre_pin_obj_size)
+    if (last_obj_size < min_pre_pin_obj_size) // 注意这里是'<'，所以最大只有0x28
     {
         dprintf (3, ("PP %p last obj %p is too short", last_pinned_plug, last_object_in_last_plug));
         record_interesting_data_point (idp_post_short);
@@ -30119,7 +30123,7 @@ void set_gap_size (uint8_t* node, size_t size)
     assert ((size == 0 )||(size >= sizeof(plug_and_reloc)));
 
 }
-// 前序和插入顺序相同的一个二叉构建
+// 中序和插入顺序相同的一个二叉构建，插入顺序又等于addr顺序
 uint8_t* gc_heap::insert_node (uint8_t* new_node, size_t sequence_number,
                    uint8_t* tree, uint8_t* last_node)
 {
@@ -30163,7 +30167,7 @@ uint8_t* gc_heap::insert_node (uint8_t* new_node, size_t sequence_number,
 }
 
 size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
-                                    uint8_t* x, uint8_t* plug_end)
+                                    uint8_t* x, uint8_t* plug_end) // x is new plug start, plug_end is last
 {
     dprintf (3, ("tree: %p, current b: %zx, x: %p, plug_end: %p",
         tree, current_brick, x, plug_end));
@@ -30192,7 +30196,7 @@ size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
         }
         else
         {
-            set_brick (b,-1);
+            set_brick (b,-1); // free space
         }
         b++;
     }
@@ -31450,7 +31454,7 @@ void gc_heap::skip_pins_in_alloc_region (generation* consing_gen, int plan_gen_n
     set_region_plan_gen_num_sip (alloc_region, plan_gen_num);
     heap_segment_plan_allocated (alloc_region) = generation_allocation_pointer (consing_gen);
 }
-
+// 简单跟一跟似乎是说原本region要promote的，根据pin之类的计算一下是否不需要promote
 void gc_heap::decide_on_demotion_pin_surv (heap_segment* region, int* no_pinned_surv_region_count)
 {
     int new_gen_num = 0;
@@ -31724,7 +31728,7 @@ void gc_heap::process_remaining_regions (int current_plan_gen_num, generation* c
             generation_allocation_segment (consing_gen) = nseg;
             generation_allocation_pointer (consing_gen) = heap_segment_mem (nseg);
         }
-
+// 这一段是？
         mark* m = pinned_plug_of (deque_pinned_plug());
         uint8_t* plug = pinned_plug (m);
         size_t len = pinned_len (m);
@@ -32381,7 +32385,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 #ifdef USE_REGIONS
         heap_segment* skip_seg = 0;
 
-        assert (generation_allocation_pointer (older_gen) == 0);
+        assert (generation_allocation_pointer (older_gen) == 0); // Q: 什么时候被置零的？
         assert (generation_allocation_limit (older_gen) == 0);
 #else //USE_REGIONS
         heap_segment* skip_seg = ephemeral_heap_segment;
@@ -32640,7 +32644,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                         active_new_gen_number, (active_new_gen_number - 1),
                         allocate_in_condemned));
                     active_new_gen_number--;
-                    allocate_in_condemned = TRUE;
+                    allocate_in_condemned = TRUE; // 考虑到下面的active_old--一定会执行，这里的意思是说如果我们再处理younger的gen的时候一定就是aic?
                 }
 
                 if (active_new_gen_number >= 0)
@@ -32682,7 +32686,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
             }
         }
 
-        BOOL last_npinned_plug_p = FALSE;
+        BOOL last_npinned_plug_p = FALSE; // 这个last指的是scan完的当前这个plug
         BOOL last_pinned_plug_p = FALSE;
 
         // last_pinned_plug is the beginning of the last pinned plug. If we merge a plug into a pinned
@@ -32693,7 +32697,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
         uint8_t* last_object_in_plug = 0;
 
-        while ((x < end) && marked (x))
+        while ((x < end) && marked (x)) // 这个while考虑的应该是连续的non-pin,pin。需要考虑的有artifact pin导致的多个plug组成的pin plug
         {
             uint8_t*  plug_start = x;
             uint8_t*  saved_plug_end = plug_end;
@@ -32801,12 +32805,12 @@ void gc_heap::plan_phase (int condemned_gen_number)
                         assert (!saved_last_npinned_plug_p);
 
                         if (last_pinned_plug)
-                        {
+                        {//所以最近的这个while循环时预期pin/non-pin交替的吗？然后一旦有gap就会跳出到再外面一个while
                             dprintf (3, ("artificially pinned plug merged with last pinned plug"));
                             merge_with_last_pin_p = TRUE;
                         }
                         else
-                        {
+                        {// 为什么这里不用save pre? A: 如果这个是non-pin又没有last_pin，是不是说前面就是gap?
                             enque_pinned_plug (plug_start, FALSE, 0);
                             last_pinned_plug = plug_start;
                         }
@@ -32859,7 +32863,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                                                            ps,
                                                            active_old_gen_number,
 #ifdef SHORT_PLUGS
-                                                           &convert_to_pinned_p,
+                                                           &convert_to_pinned_p, // 这个convert的情况好像是如果new addr导致和下一个pin plug之间gap但是不够一个obj就不去移动当前plug
                                                            (npin_before_pin_p ? plug_end : 0),
                                                            seg1,
 #endif //SHORT_PLUGS
@@ -32885,7 +32889,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     {
                         if (generation_allocator(older_gen)->discard_if_no_fit_p())
                         {
-                            allocate_in_condemned = TRUE;
+                            allocate_in_condemned = TRUE; // 有种可能是比如commit/reserve不够了，对于gen1还是希望先在gen2分配
                         }
 
                         new_address = allocate_in_condemned_generations (consing_gen, ps, active_old_gen_number,
@@ -32912,13 +32916,13 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     assert (last_pinned_plug_p == FALSE);
                     convert_to_pinned_plug (last_npinned_plug_p, last_pinned_plug_p, pinned_plug_p,
                                             ps, artificial_pinned_size);
-                    enque_pinned_plug (plug_start, FALSE, 0);
+                    enque_pinned_plug (plug_start, FALSE, 0); // TODO: 检查这个false的含义
                     last_pinned_plug = plug_start;
                 }
                 else
                 {
                     if (!new_address)
-                    {
+                    { // 什么意思，没法找到新地址是合法情况？
                         //verify that we are at then end of the ephemeral segment
                         assert (generation_allocation_segment (consing_gen) ==
                                 ephemeral_heap_segment);
@@ -33057,7 +33061,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
                 verify_pins_with_post_plug_info("after insert node");
             }
-        }
+        } // 注意这里是个while，也就是连续的mark pin/non-pin会在这个while中处理
 
         if (num_pinned_plugs_in_plug > 1)
         {
@@ -33206,7 +33210,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
     }
 
     if (settings.condemned_generation == (max_generation - 1 ))
-    {
+    { // TBC: 是不是都仅仅是一些info collect
         generation* older_gen = generation_of (settings.condemned_generation + 1);
         size_t rejected_free_space = generation_free_obj_space (older_gen) - r_free_obj_space;
         size_t free_list_allocated = generation_free_list_allocated (older_gen) - r_older_gen_free_list_allocated;
@@ -34346,7 +34350,7 @@ heap_segment* gc_heap::find_first_valid_region (heap_segment* region, bool compa
             dprintf (REGIONS_LOG, ("  gen%d->%d", gen_num, plan_gen_num));
         }
         else
-        {
+        { // special_sweep_p 应该是说这个gen全部sweep需要保留一个region？
             plan_gen_num = (special_sweep_p ? gen_num : get_plan_gen_num (gen_num));
             dprintf (REGIONS_LOG, ("  gen%d->%d, special_sweep_p %d, swept_in_plan %d",
                 gen_num, plan_gen_num, (int)special_sweep_p,
@@ -35531,7 +35535,7 @@ void gc_heap::relocate_address (uint8_t** pold_address THREAD_NUMBER_DCL)
 {
     uint8_t* old_address = *pold_address;
 #ifdef USE_REGIONS
-    if (!is_in_gc_range (old_address) || !should_check_brick_for_reloc (old_address))
+    if (!is_in_gc_range (old_address) || !should_check_brick_for_reloc (old_address)) // 这个如果不是当前comdened gen的就会被跳过，那那些obj什么时候被reloc?
     {
         return;
     }
@@ -35572,7 +35576,7 @@ void gc_heap::relocate_address (uint8_t** pold_address THREAD_NUMBER_DCL)
                 new_address = (old_address + node_relocation_distance (node));
             else
             {
-                if (node_left_p (node))
+                if (node_left_p (node)) // left用来优化的情况，plug1 gap plug2 -> plug1 plug2, 当两个相连plug reloc之后相接的情况
                 {
                     dprintf(3,(" L: %zx", (size_t)node));
                     new_address = (old_address +
@@ -35674,7 +35678,7 @@ gc_heap::check_demotion_helper (uint8_t** pval, uint8_t* parent_obj)
     if (!is_in_heap_range (child_object))
         return;
     int child_object_plan_gen = get_region_plan_gen_num (child_object);
-    bool child_obj_demoted_p = is_region_demoted (child_object);
+    bool child_obj_demoted_p = is_region_demoted (child_object); // TBC: gen2->gen2，这个是false吗？
 
     if (child_obj_demoted_p)
     {
@@ -35718,7 +35722,7 @@ gc_heap::reloc_survivor_helper (uint8_t** pval)
     THREAD_FROM_HEAP;
     relocate_address (pval THREAD_NUMBER_ARG);
 
-    check_demotion_helper (pval, (uint8_t*)pval);
+    check_demotion_helper (pval, (uint8_t*)pval); // 第二个参数是reloc之前的，compact的时候会动card吗？
 }
 
 inline void
@@ -35757,13 +35761,13 @@ void gc_heap::reloc_ref_in_shortened_obj (uint8_t** address_to_set_card, uint8_t
 
     check_demotion_helper (address_to_reloc, (uint8_t*)address_to_set_card);
 }
-
+// 提前计算好overwrite的目标地址，compact的时候没有brick table就无法计算目标了。
 void gc_heap::relocate_pre_plug_info (mark* pinned_plug_entry)
 {
     THREAD_FROM_HEAP;
     uint8_t* plug = pinned_plug (pinned_plug_entry);
     uint8_t* pre_plug_start = plug - sizeof (plug_and_gap);
-    // Note that we need to add one ptr size here otherwise we may not be able to find the relocated
+    // Note that we need to add one ptr size here otherwise we may not be able to find the relocated // 一个有意思的点是brick table不支持计算sync header的reloc
     // address. Consider this scenario:
     // gen1 start | 3-ptr sized NP | PP
     // 0          | 0x18           | 0x30
@@ -35952,7 +35956,7 @@ void gc_heap::relocate_shortened_survivor_helper (uint8_t* plug, uint8_t* plug_e
     verify_pins_with_post_plug_info("begin reloc short surv");
 
     while (x < plug_end)
-    {
+    { // 为什么要0x30，感觉只要不碰到mt就可以了呀，而且就算mt被overwrite了，我们不是也可以去copy的里面去读取的吗？还是说只是简洁一点？
         if (check_short_obj_p && ((DWORD)(plug_end - x) < (DWORD)min_pre_pin_obj_size))
         {
             dprintf (3, ("last obj %p is short", x));
@@ -36159,7 +36163,7 @@ void gc_heap::relocate_survivors (int condemned_gen_number,
         relocate_args args;
         args.is_shortened = FALSE;
         args.pinned_plug_entry = 0;
-        args.last_plug = 0;
+        args.last_plug = 0; // 我们要知道plug len，所以我们找到下一个plug才处理上一个plug
 
         while (1)
         {
@@ -36515,8 +36519,8 @@ void gc_heap::relocate_phase (int condemned_gen_number,
 #endif //MULTIPLE_HEAPS
 
     dprintf (2, (ThreadStressLog::gcStartRelocateMsg(), heap_number));
-
-    dprintf(3,("Relocating roots"));
+// 这个的线程安全是靠scan的时候只有当前heap的root会被scan
+    dprintf(3,("Relocating roots")); // 这是reloc root本身，没有像mark phase一样去go through obj
     GCScan::GcScanRoots(GCHeap::Relocate,
                             condemned_gen_number, max_generation, &sc);
 
@@ -36532,7 +36536,7 @@ void gc_heap::relocate_phase (int condemned_gen_number,
 #ifdef FEATURE_CARD_MARKING_STEALING
     // for card marking stealing, do the other relocations *before* we scan the older generations
     // this gives us a chance to make up for imbalance in these phases later
-    {
+    { // 如果是full gc呢？full gc的时候这个会不会不平衡？
         dprintf(3, ("Relocating survivors"));
         relocate_survivors(condemned_gen_number,
             first_condemned_address);
@@ -36540,7 +36544,7 @@ void gc_heap::relocate_phase (int condemned_gen_number,
 
 #ifdef FEATURE_PREMORTEM_FINALIZATION
     dprintf(3, ("Relocating finalization data"));
-    finalize_queue->RelocateFinalizationData(condemned_gen_number,
+    finalize_queue->RelocateFinalizationData(condemned_gen_number, // TBC: concurrency
         __this);
 #endif // FEATURE_PREMORTEM_FINALIZATION
 
@@ -36720,7 +36724,7 @@ void gc_heap::copy_cards_range (uint8_t* dest, uint8_t* src, size_t len, BOOL co
     if (copy_cards_p)
         copy_cards_for_addresses (dest, src, len);
     else
-        clear_card_for_addresses (dest, dest + len);
+        clear_card_for_addresses (dest, dest + len); // 为什么不直接clear整个card呢，想memset少一点？
 }
 
 // POPO TODO: We should actually just recover the artificially made gaps here..because when we copy
@@ -36870,14 +36874,14 @@ void gc_heap::compact_plug (uint8_t* plug, size_t size, BOOL check_last_object_p
             dprintf (3, ("fix B for padding: %zd: %p->%p",
                 unused_arr_size, (reloc_plug - unused_arr_size), reloc_plug));
             // The alignment padding is straddling one or more bricks;
-            // it has to be the last "object" of its first brick.
+            // it has to be the last "object" of its first brick. // 记录这个free obj的意义是？
             fix_brick_to_highest (reloc_plug - unused_arr_size, reloc_plug);
         }
     }
 #endif // FEATURE_STRUCTALIGN
 
 #ifdef SHORT_PLUGS
-    if (is_plug_padded (plug))
+    if (is_plug_padded (plug)) //...是写太多ifdef混乱了吗，上面已经clear了呀
     {
         make_unused_array (reloc_plug - Align (min_obj_size), Align (min_obj_size));
 
@@ -36922,7 +36926,7 @@ void gc_heap::compact_plug (uint8_t* plug, size_t size, BOOL check_last_object_p
                      args->before_last_plug,
                      (args->before_last_plug - brick_address (current_reloc_brick))));
 
-            {
+            { // 如果因为pin plug导致这个brick被多次set，结果会正确吗？比如一开始是pin plug set了一次，然后reloc到pin plug前面的一个obj再次set了，就导致pin plug没有被正确处理。是说这个case不会有吗？
                 set_brick (current_reloc_brick,
                         args->before_last_plug - brick_address (current_reloc_brick));
             }
@@ -36948,11 +36952,11 @@ void gc_heap::compact_plug (uint8_t* plug, size_t size, BOOL check_last_object_p
             brick, (end_brick - 1)));
         while (brick < end_brick)
         {
-            set_brick (brick, -1);
+            set_brick (brick, -1); // 为什么不是-2,-3...
             brick++;
         }
         // code last brick offset as a plug address
-        args->before_last_plug = brick_address (end_brick) -1;
+        args->before_last_plug = brick_address (end_brick) -1; // 这个有可能是为了上面一个if里面before_last_plug - brick_address能够的-1才取这个值？
         current_reloc_brick = end_brick;
         dprintf (3, ("setting before last to %p, last brick to %zx",
             args->before_last_plug, current_reloc_brick));
@@ -37143,7 +37147,7 @@ void gc_heap::compact_phase (int condemned_gen_number,
             return;
         }
 #endif //!USE_REGIONS
-
+// 这个过程中会把birck table又重新变成指向highest obj
         size_t  end_brick = brick_of (end_address-1);
         compact_args args;
         args.last_plug = 0;
@@ -40601,11 +40605,64 @@ void gc_heap::copy_cards (size_t dst_card,
     }
 #endif
 }
+// 如果没有对齐，那么dest的一个card需要src的两个card合并，这也是copy_cards的nextp的含义
+/* 分类讨论一下
+1. rel & card_size-1 == 0
+1.1 straddle
+         [src_card[card_of(src+len-1)
+    -----+--------+--------+
+    [opt |        |       )
+    +---------------------+
 
+    [start_dest_card
+[dest    |        [end_dest_card
++--------+--------+--------+
+    [opt |        |       )
+    +---------------------+
+    |dest
+note: dest<=start_dest_card<=end_dest_card
+
+1.2 not straddle
+[end_dest_card
+[dest    [start_dest_card
++--------+
+ [obj  )
+ +-----+
+dest=end_dest_card<start_dest_card
+
+2.1 straddle
+         [src_card         [card_of(src+len-1)
++--------+--------+--------+
+      [src |        |        )
+      +----+--------+--------+
+            |card_address(start_dest_card)+rel // not aligned
+card_of(src) <= src_card
+
+         [start_dest_card
+[dest    |        [end_dest_card
++--------+--------+--------+
+    [opt |        |        )
+    +----+--------+--------+
+    |dest
+note: dest<=start_dest_card<=end_dest_card
+
+2.2 not straddle
+
+----+--------+--------+
+   A  [obj )B
+     A  [obj )B
+       A  [obj )B
+
+[end_dest_card
+[dest    [start_dest_card
++--------+
+A  [obj )B
+   +----+
+*/
 void gc_heap::copy_cards_for_addresses (uint8_t* dest, uint8_t* src, size_t len)
 {
     ptrdiff_t relocation_distance = src - dest;
-    size_t start_dest_card = card_of (align_on_card (dest));
+    size_t start_dest_card = card_of (align_on_card (dest)); // [start_dest_card, end_dest_card) 是被dest完全覆盖的card范围
     size_t end_dest_card = card_of (dest + len - 1);
     size_t dest_card = start_dest_card;
     size_t src_card = card_of (card_address (dest_card)+relocation_distance);
@@ -40621,8 +40678,14 @@ void gc_heap::copy_cards_for_addresses (uint8_t* dest, uint8_t* src, size_t len)
         start_dest_card, card_address (start_dest_card), end_dest_card, card_address (end_dest_card), card_of (dest)));
 
     //First card has two boundaries
+    // [dest, align_on_card(dest)) -> one card #card_of(dest)
+    // <=> [src, card_address(start_dest_card)+rel) (len < card_len)
+    // two possible card: #card_of(src), #card_of(card_address(start_dest_card)+rel-1) 这两个card任意一个set, card_of(dest)也要set
+    // 下面的if处理了第二个card，需要考虑 1. card是否包括了src
+    // if card_address(card_of(card_address(start_dest_card)+rel-1)) >= src + len: 不用处理
+    //  <=> card_of(card_address(start_dest_card)+rel-1) >= card_of(src+len)
     if (start_dest_card != card_of (dest))
-    {
+    { // 如果rel是card_size multipler, 这个会导致虚假的set，第二个条件里面应该有'-1', 如果rel不是aligned, 拿加上'-1'也是一样的结果，所以下面rel后面应该加上'-1'
         if ((card_of (card_address (start_dest_card) + relocation_distance) <= card_of (src + len - 1))&&
             card_set_p (card_of (card_address (start_dest_card) + relocation_distance)))
         {
@@ -40640,7 +40703,7 @@ void gc_heap::copy_cards_for_addresses (uint8_t* dest, uint8_t* src, size_t len)
     if (card_set_p (card_of (src)))
         set_card (card_of (dest));
 
-
+    // 注意这里会对dest做unset，所以这里dest cards范围应该被obj完全cover
     copy_cards (dest_card, src_card, end_dest_card,
                 ((dest - align_lower_card (dest)) != (src - align_lower_card (src))));
 

@@ -182,6 +182,7 @@ inline void FATAL_GC_ERROR()
 #define RESPECT_LARGE_ALIGNMENT //Preserve double alignment of objects during relocation
 #endif //FEATURE_64BIT_ALIGNMENT
 
+// 看上去是通过加入一些gap而避免在promote的时候导致plug和已有的obj连在一起导致plug变大？
 #define SHORT_PLUGS //used to keep ephemeral plugs short so they fit better into the oldest generation free items
 
 #ifdef SHORT_PLUGS
@@ -5014,7 +5015,7 @@ size_t& generation_plan_allocation_start_size (generation* inst)
   return inst->plan_allocation_start_size;
 }
 #endif //!USE_REGIONS
-inline
+inline // 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
 uint8_t*& generation_allocation_context_start_region (generation* inst)
 {
   return inst->allocation_context_start_region;
@@ -5054,7 +5055,7 @@ size_t&  generation_end_seg_allocated (generation* inst)
 {
     return inst->end_seg_allocated;
 }
-inline
+inline // 只在allocate_in_older_generation中使用，来帮助统计在region end分配了多少空间，不是局部变量只是因为要跨多次调用
 BOOL&  generation_allocate_end_seg_p (generation* inst)
 {
     return inst->allocate_end_seg_p;
@@ -5167,7 +5168,7 @@ struct gap_reloc_pair
     size_t   reloc;
     pair        m_pair;
 };
-
+// '<' 也就是说最大的obj size是 0x28，应该是保证MT不被overwrite掉
 #define min_pre_pin_obj_size (sizeof (gap_reloc_pair) + min_obj_size)
 
 struct DECLSPEC_ALIGN(8) aligned_plug_and_gap
