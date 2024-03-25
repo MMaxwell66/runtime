@@ -43,7 +43,7 @@ typedef struct _EventPipeStackContentsInstance EventPipeStackContentsInstance;
 typedef struct _EventPipeSystemTime EventPipeSystemTime;
 typedef struct _EventPipeThread EventPipeThread;
 typedef struct _EventPipeThreadHolder EventPipeThreadHolder;
-typedef struct _EventPipeThreadSessionState EventPipeThreadSessionState;
+typedef struct _EventPipeThreadSessionState EventPipeThreadSessionState; // tracked by thread_session_state_list if have > 0 buffer
 typedef struct _FastSerializableObject FastSerializableObject;
 typedef struct _FastSerializableObjectVtable FastSerializableObjectVtable;
 typedef struct _FastSerializer FastSerializer;
@@ -147,7 +147,7 @@ typedef enum {
 	EP_SESSION_TYPE_LISTENER,
 	EP_SESSION_TYPE_IPCSTREAM,
 	EP_SESSION_TYPE_SYNCHRONOUS,
-	EP_SESSION_TYPE_FILESTREAM
+	EP_SESSION_TYPE_FILESTREAM // 和file的区别是有一个专门的thread来pull，从而防止buffer overflow导致的event drop, 换句话说file挺没用的，尤其是circular buffer是drop new而不是真circular PR#52443
 } EventPipeSessionType ;
 
 typedef enum {

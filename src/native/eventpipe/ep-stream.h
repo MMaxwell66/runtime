@@ -108,7 +108,7 @@ struct _FastSerializableObject_Internal {
 	FastSerializableObjectVtable *vtable;
 	int32_t object_version;
 	int32_t min_reader_version;
-	bool is_private;
+	bool is_private; // begin_private_object or begin_object
 };
 
 #if !defined(EP_INLINE_GETTER_SETTER) && !defined(EP_IMPL_STREAM_GETTER_SETTER)

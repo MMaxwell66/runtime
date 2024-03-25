@@ -1185,7 +1185,7 @@ ep_start_streaming (EventPipeSessionID session_id)
 
 	EP_LOCK_ENTER (section1)
 		ep_raise_error_if_nok_holding_lock (is_session_id_in_collection (session_id), section1);
-		if (_ep_can_start_threads)
+		if (_ep_can_start_threads) // 这个是在start的时候有些GC什么的还没完全启动，所以不能一开始就start thread从而引入的delay
 			ep_session_start_streaming ((EventPipeSession *)(uintptr_t)session_id);
 		else
 			dn_vector_push_back (_ep_deferred_enable_session_ids, session_id);
@@ -1339,9 +1339,9 @@ ep_init (void)
 	for (uint32_t i = 0; i < EP_MAX_NUMBER_OF_SESSIONS; ++i)
 		ep_volatile_store_session (i, NULL);
 
-	ep_config_init (ep_config_get ());
+	ep_config_init (ep_config_get ()); // add "event metadata" event
 
-	ep_event_source_init (ep_event_source_get ());
+	ep_event_source_init (ep_event_source_get ()); // 在 disable session的时候输出process info
 
 	// This calls into auto-generated code to initialize the runtime specific providers
 	// and events so that the EventPipe configuration lock isn't taken at runtime

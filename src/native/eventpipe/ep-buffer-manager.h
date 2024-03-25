@@ -118,7 +118,7 @@ struct _EventPipeBufferManager_Internal {
 	// The maximum allowable size of buffers under management.
 	// Attempted allocations above this threshold result in
 	// dropped events.
-	size_t max_size_of_all_buffers;
+	size_t max_size_of_all_buffers;	// from circular buffer mem size
 	// The amount of allocations we can do at this moment before
 	// triggering a sequence point
 	size_t remaining_sequence_point_alloc_budget;

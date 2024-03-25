@@ -55,7 +55,7 @@ struct _EventPipeSessionProviderList {
 #else
 struct _EventPipeSessionProviderList_Internal {
 #endif
-	dn_list_t *providers;
+	dn_list_t *providers; // Q: 如果provider还没有注册，这里会有对应的session_provider吗？因为config_register_provider中的逻辑似乎是依赖于提前有的？A: yes, ep_session_provider_list_alloc
 	EventPipeSessionProvider *catch_all_provider;
 };
 

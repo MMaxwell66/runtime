@@ -121,7 +121,7 @@ struct _EventPipeSequencePoint {
 #else
 struct _EventPipeSequencePoint_Internal {
 #endif
-	dn_umap_t *thread_sequence_numbers;
+	dn_umap_t *thread_sequence_numbers; // map EventPipeThreadSessionState to sequence number of its thread. 我觉得应该就是说在这个sequence point之前的所有线程的sequence number
 	ep_timestamp_t timestamp;
 };
 

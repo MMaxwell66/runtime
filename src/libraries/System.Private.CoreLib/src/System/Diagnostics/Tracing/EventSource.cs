@@ -755,6 +755,7 @@ namespace System.Diagnostics.Tracing
 
         /// <summary>
         /// This method is called when the eventSource is updated by the controller.
+        /// 应该类似是ETW controller发过来一个自定义的command？但是似乎ETW发过来的自定义command会被ignore?
         /// </summary>
         protected virtual void OnEventCommand(EventCommandEventArgs command) { }
 
@@ -2432,7 +2433,7 @@ namespace System.Diagnostics.Tracing
             }
             internal override void OnControllerCommand(ControllerCommand command, IDictionary<string, string?>? arguments,
                                                               int perEventSourceSessionId)
-            {
+            {//比如Win native API EventRegister 中的callback中的control(manifest request)的时候会调用这个
                 // We use null to represent the ETW EventListener.
                 EventListener? listener = null;
                 m_eventSource.SendCommand(listener, m_eventProviderType, perEventSourceSessionId,
@@ -5281,7 +5282,7 @@ namespace System.Diagnostics.Tracing
         }
 
         /// <summary>
-        /// <term>Will NOT build a manifest!</term> If the intention is to build a manifest don�t use this constructor.
+        /// <term>Will NOT build a manifest!</term> If the intention is to build a manifest don�t use this constructor.
         ///'resources, is a resource manager.  If specified all messages are localized using that manager.
         /// </summary>
         internal ManifestBuilder(ResourceManager? resources, EventManifestOptions flags)

@@ -1292,7 +1292,7 @@ namespace System.Diagnostics.Tracing
 
         protected unsafe void ProviderCallback(
                         EventProvider target,
-                        byte *additionalData,
+                        byte *additionalData, /* EventPipe session ID */
                         int controlCode,
                         byte level,
                         long matchAnyKeywords,

@@ -42,7 +42,7 @@ EventPipeConfiguration *
 ep_config_get (void)
 {
 	// Singleton.
-	return &_ep_config_instance;
+	return &_ep_config_instance; // 这里面保存了进程中注册的provider, events
 }
 
 EventPipeConfiguration *

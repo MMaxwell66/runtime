@@ -140,7 +140,7 @@ fast_serializer_write_serialization_type (
 {
 	EP_ASSERT (fast_serializable_object != NULL);
 
-	// Write the BeginObject tag.
+	// Write the BeginObject tag. // fast serializer应该是支持reference来避免重复输出type string之类的，看上去NetTrace并没有使用哦
 	ep_fast_serializer_write_tag (fast_serializer, fast_serializable_object->is_private ? FAST_SERIALIZER_TAGS_BEGIN_PRIVATE_OBJECT : FAST_SERIALIZER_TAGS_BEGIN_OBJECT, NULL, 0);
 
 	// Write a NullReferenceTag, which implies that the following fields belong to SerializationType.

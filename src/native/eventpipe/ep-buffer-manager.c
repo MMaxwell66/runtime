@@ -996,7 +996,7 @@ ep_buffer_manager_write_event (
 
 	// Check to see if we need to allocate a new buffer, and if so, do it here.
 	if (alloc_new_buffer) {
-		uint32_t request_size = sizeof (EventPipeEventInstance) + ep_event_payload_get_size (payload);
+		uint32_t request_size = sizeof (EventPipeEventInstance) + ep_event_payload_get_size (payload); // 怎么没有计算stack frame的size?
 		bool write_suspended = false;
 		buffer = buffer_manager_allocate_buffer_for_thread (buffer_manager, session_state, request_size, &write_suspended);
 		if (!buffer) {
