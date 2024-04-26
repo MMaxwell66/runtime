@@ -1079,7 +1079,7 @@ COR_ILMETHOD* MethodDesc::GetILHeader(BOOL fAllowOverrides /*=FALSE*/)
 
     if (pIL == NULL)
     {
-        pIL = pModule->GetIL(GetRVA());
+        pIL = pModule->GetIL(GetRVA()); // just base + RVA, but will check IL code range
     }
 
 #ifdef _DEBUG_IMPL

@@ -22420,7 +22420,7 @@ void gc_heap::gc1()
             check_gen0_bricks();
 
             GCScan::GcRuntimeStructuresValid (FALSE);
-            plan_phase (n);
+            plan_phase (n); // also swap or compact
             GCScan::GcRuntimeStructuresValid (TRUE);
 
             check_gen0_bricks();
@@ -36866,7 +36866,7 @@ void gc_heap::compact_plug (uint8_t* plug, size_t size, BOOL check_last_object_p
     }
 
     if (unused_arr_size != 0)
-    {
+    {// 一个可能会使用这里设置的birck table的地方是compact之后，search "free [%zx %zx[ pin"
         make_unused_array (reloc_plug - unused_arr_size, unused_arr_size);
 
         if (brick_of (reloc_plug - unused_arr_size) != brick_of (reloc_plug))

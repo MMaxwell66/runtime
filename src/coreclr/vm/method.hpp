@@ -3,6 +3,16 @@
 //
 // method.hpp
 //
+/*
+MethodDesc
+1. normal class + .ctor => NativeCode(Seems for tired)
+2. normal class + normal method => NativeCode + HasNonVtableSlot
+   对于这种最普通的method，看上去是说它不会再MT中有slot，而仅有MethodDesc。那有一个问题是MT中的slot和MD如何映射？是依赖于这种NonVtable的slot一定在最后吗？如果是的话，在build MD的时候哪行code调整了顺序?
+3. normal class + generic method <M0> => NativeCode + Instantiated
+
+Q: MDC中的顺序是怎么样？看上去是根据token的顺序
+Q: 和上面2中的注释相关，MD的slot排序
+*/
 
 //
 // See the book of the runtime entry for overall design:

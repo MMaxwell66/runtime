@@ -3583,8 +3583,8 @@ private:
 
     union
     {
-        PerInstInfo_t m_pPerInstInfo;
-        TADDR         m_ElementTypeHnd;
+        PerInstInfo_t m_pPerInstInfo; // !array & m_wFlags2 0x01
+        TADDR         m_ElementTypeHnd; // array
         TADDR         m_pMultipurposeSlot1;
     };
     public:
