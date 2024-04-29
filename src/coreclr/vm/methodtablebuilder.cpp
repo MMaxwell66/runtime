@@ -449,7 +449,26 @@ MethodTableBuilder::ExpandApproxInterface(
 // Arguments:
 //   dbg_pClassMT - Class on which the interfaces are declared (either explicitly or implicitly).
 //                  It will never be an interface. It may be NULL (if it is the type being built).
-// 处理直接定义在thType对应的TypeDef上的接口
+// 处理直接定义在thType对应的TypeDef上的InterfaceImpl
+/*
+interface I<U> {}
+class C1<U> : I<U> {}
+class C2<U,V> : C1<U>, I<T> {}
+class C3<U> : C2<int, U> {}
+class C4 : C3<int> {}
+parent chain: C4 : C3<int> : C2<int, int> : C1<int> : object
+-- C1<int> --
+I<U>
+-- C2<int, int> --
+I<U>
+I<V>
+-- C3<int> --
+I<int>
+I<U>
+-- C4 --
+I<int>
+I<int>
+*/
 void
 MethodTableBuilder::ExpandApproxDeclaredInterfaces(
     bmtInterfaceInfo *          bmtInterface,  // out parameter, various parts cumulatively written to.
@@ -486,11 +505,11 @@ MethodTableBuilder::ExpandApproxDeclaredInterfaces(
 void
 MethodTableBuilder::ExpandApproxInheritedInterfaces(
     bmtInterfaceInfo *      bmtInterface,
-    bmtRTType *             pParentType)
+    bmtRTType *             pParentType) // 这个的generic有可能是有instance的
 {
     STANDARD_VM_CONTRACT;
 
-    // Expand interfaces in superclasses first.  Interfaces inherited from parents
+    // Expand interfaces in superclasses (-> topmost) first.  Interfaces inherited from parents
     // must have identical indexes as in the parent.
     bmtRTType * pParentOfParent = pParentType->GetParentType();
 
@@ -542,6 +561,8 @@ MethodTableBuilder::ExpandApproxInheritedInterfaces(
 // Fill out a fully expanded interface map, such that if we are declared to
 // implement I3, and I3 extends I1,I2, then I1,I2 are added to our list if
 // they are not already present.
+//
+// 1. interface from parent 2. interface transitive
 void
 MethodTableBuilder::LoadApproxInterfaceMap()
 {
@@ -799,7 +820,7 @@ MethodTableBuilder::CreateTypeChain(
         pType->SetParentType(
             CreateTypeChain(
                 pMTParent,
-                pMT->GetSubstitutionForParent(&pType->GetSubstitution())));
+                pMT->GetSubstitutionForParent(&pType->GetSubstitution()))); // 这里是cannonical mt, 不知道会不会有影响，比如什么parent有几个generic parameter已经指定的
     }
 
     return pType;
@@ -1262,7 +1283,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
     MethodTable *              pParentMethodTable,
     const bmtGenericsInfo *    bmtGenericsInfo,
     SigPointer                 parentInst,              // 如果extends TypeRef，这个是TypeRef的内容
-    WORD                       cBuildingInterfaceList)
+    WORD                       cBuildingInterfaceList   // #!InterfaceImpl)
 {
     CONTRACTL
     {
@@ -1464,7 +1485,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
                 BuildMethodTableThrowException(IDS_CLASSLOAD_ENUM_EXTRA_GENERIC_TYPE_PARAM);
             }
 
-            mdTypeDef tdEnclosing = mdTypeDefNil;
+            mdTypeDef tdEnclosing = mdTypeDefNil; // 是不是可以用 bmtInternal->pType->GetEnclosingTypeToken?
             HRESULT hr = GetModule()->m_pEnclosingTypeMap->GetEnclosingTypeNoThrow(GetCl(), &tdEnclosing, GetModule()->GetMDImport());
             if (FAILED(hr))
                 ThrowHR(hr, BFA_UNABLE_TO_GET_NESTED_PROPS);
@@ -2110,7 +2131,7 @@ MethodTableBuilder::ResolveInterfaces(
 
     // resolve unresolved interfaces and determine the size of the largest interface (in # slots)
 
-
+// 读取parent的interface + 自己declare的interface (incl. transitive) 但是没有做去重（这个可能不需要做）（重是指，在继承多个等级之间由于generic导致的重复, e.g., I<int>, I<U>, apply U -> int, I<int>, I<int>）
     LoadApproxInterfaceMap();
 
     // Inherit parental slot counts
@@ -2267,6 +2288,7 @@ MethodTableBuilder::EnumerateMethodImpls()
 
     // This is the first pass. In this we will simply enumerate the token pairs and fill in
     // the data structures. In addition, we'll sort the list and eliminate duplicates.
+    // 从当前type的MethodImpl (.override) 里复制出来，排序+去重
     if (bmtMethod->dwNumberMethodImpls > 0)
     {
         //
@@ -2351,7 +2373,7 @@ MethodTableBuilder::EnumerateMethodImpls()
             mdToken tkParent;
 
             mdToken theBody, theDecl;
-            Substitution theDeclSubst(GetModule(), SigPointer(), NULL); // this can get updated later below.
+            Substitution theDeclSubst(GetModule(), SigPointer(), NULL); // this can get updated later below. // Method sig中的VAR是什么的sub
 
             theBody = bmtMetaData->rgMethodImplTokens[i].methodBody;
             theDecl = bmtMetaData->rgMethodImplTokens[i].methodDecl;
@@ -2359,9 +2381,9 @@ MethodTableBuilder::EnumerateMethodImpls()
             // IMPLEMENTATION LIMITATION: currently, we require that the body of a methodImpl
             // belong to the current type. This is because we need to allocate a different
             // type of MethodDesc for bodies that are part of methodImpls.
-            if (TypeFromToken(theBody) != mdtMethodDef) // 什么合理的情况这个会不是MethodDef?
+            if (TypeFromToken(theBody) != mdtMethodDef) // TBC: 什么合理的情况这个会不是MethodDef? none in CoreLib
             {
-                // MethodImpl就是override method的样子。不太对，好像又是interface实现？
+                // MethodImpl就是override method的样子（不对）。不太对，好像又是interface实现？大多数是显示的interface实现，以及covariant return methods
                 hr = FindMethodDeclarationForMethodImpl(
                     theBody,
                     &theBody,
@@ -2404,7 +2426,7 @@ MethodTableBuilder::EnumerateMethodImpls()
             }
 
             // The token is not a MethodDef (likely a MemberRef)
-            else
+            else // case1: 如果parent是generic的那对应的是class要是TypeSpec从而用MemberRef
             {
                 // Decl must be valid token
                 if ((TypeFromToken(theDecl) != mdtMemberRef) || (rid == 0) || (rid > maxRidMR))
@@ -2425,7 +2447,7 @@ MethodTableBuilder::EnumerateMethodImpls()
                 if (FAILED(hr))
                     BuildMethodTableThrowException(hr, *bmtError);
 
-                theDeclSubst = Substitution(tkParent, GetModule(), NULL);
+                theDeclSubst = Substitution(tkParent, GetModule(), NULL); //这么理解: C:I<int>, I<T>.M(T) method的T0是I<T>的T0
             }
 
             // Perform initial rudimentary validation of the token. Full token verification
@@ -2459,7 +2481,11 @@ MethodTableBuilder::EnumerateMethodImpls()
                 // Can't use memcmp because there may be two AssemblyRefs
                 // in this scope, pointing to the same assembly, etc.).
                 BOOL compatibleSignatures = MetaSig::CompareMethodSigs(pSigDecl, cbSigDecl, GetModule(), &theDeclSubst, pSigBody, cbSigBody, GetModule(), NULL, FALSE);
-
+// ~~TBC 1. 如果是因为逆变不compatible呢？ 2.这里的check要求decl的parent不是interface，这应该是非常见case 3. 实际测试下c#似乎比较难构造出这个case.综上我先放一个TBC~~
+// https://github.com/dotnet/runtime/blob/main/docs/design/features/covariant-return-methods.md
+// https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/proposals/csharp-9.0/covariant-returns
+// https://github.com/dotnet/runtime/commit/fa141526c036c4b10809d4d7258e885e45a77f54
+// 一个特别的feature，允许子类override父类的函数，但是return存在协变。
                 if (!compatibleSignatures && IsEligibleForCovariantReturns(theDecl))
                 {
                     if (MetaSig::CompareMethodSigs(pSigDecl, cbSigDecl, GetModule(), &theDeclSubst, pSigBody, cbSigBody, GetModule(), NULL, TRUE))
@@ -12062,6 +12088,7 @@ MethodTableBuilder::GatherGenericsInfo(
     IMDInternalImport * pInternalImport = pModule->GetMDImport();
 
     // Enumerate the formal type parameters
+    // R2R or GenericParam.Owner
     DWORD numGenericArgs = pModule->m_pTypeGenericInfoMap->GetGenericArgumentCount(cl, pInternalImport);
 
     // Work out what kind of EEClass we're creating w.r.t. generics.  If there
@@ -12292,7 +12319,7 @@ TypeHandle
 ClassLoader::CreateTypeHandleForTypeDefThrowing(
     Module *          pModule,
     mdTypeDef         cl,
-    Instantiation     inst,
+    Instantiation     inst, // 跟BuildMT里Nested的检验逻辑，这个至少数量是和cl对应的type的generic parameter的数量一致
     AllocMemTracker * pamTracker)
 {
     CONTRACT(TypeHandle)
@@ -12526,7 +12553,7 @@ ClassLoader::CreateTypeHandleForTypeDefThrowing(
                 {
                     pAssembly->ThrowTypeLoadException(pInternalImport, cl, IDS_CLASSLOAD_BADFORMAT);
                 }
-                // Interfaces behave covariantly
+                // Interfaces behave covariantly // 这里只是检查了co/contravariance，没有检查其它的
                 if (!EEClass::CheckVarianceInSig(
                         genericsInfo.GetNumGenericArgs(),
                         genericsInfo.pVarianceInfo,

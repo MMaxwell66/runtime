@@ -2735,7 +2735,7 @@ HRESULT CompareTypeTokensNT(mdToken tk1, mdToken tk2, Module *pModule1, Module *
 //---------------------------------------------------------------------------------------
 //
 // Returns S_FALSE if the type is not decorated with TypeIdentifierAttribute.
-//
+// https://learn.microsoft.com/en-us/dotnet/framework/interop/type-equivalence-and-embedded-interop-types#type-identity
 HRESULT TypeIdentifierData::Init(Module *pModule, mdToken tk)
 {
     CONTRACTL
@@ -3055,7 +3055,7 @@ static BOOL CompareDelegatesForEquivalence(mdToken tk1, mdToken tk2, Module *pMo
 
 #ifndef DACCESS_COMPILE
 //---------------------------------------------------------------------------------------
-//
+// tdPublic || all nest scope tdNestedPublic + tdPublic at outermost
 BOOL IsTypeDefExternallyVisible(mdToken tk, Module *pModule, DWORD dwAttrClass)
 {
     CONTRACTL
@@ -3119,6 +3119,7 @@ BOOL IsTypeDefEquivalent(mdToken tk, Module *pModule)
 
 #ifdef FEATURE_TYPEEQUIVALENCE
 #ifndef DACCESS_COMPILE
+// https://learn.microsoft.com/en-us/dotnet/framework/interop/type-equivalence-and-embedded-interop-types#marking-com-types-for-type-equivalence
 BOOL IsTypeDefEquivalent(mdToken tk, Module *pModule)
 {
     CONTRACTL
@@ -3240,6 +3241,7 @@ BOOL IsTypeDefEquivalent(mdToken tk, Module *pModule)
 #endif
 #endif // FEATURE_TYPEEQUIVALENCE
 
+// https://learn.microsoft.com/en-us/dotnet/framework/interop/type-equivalence-and-embedded-interop-types#type-identity
 BOOL CompareTypeDefsForEquivalence(mdToken tk1, mdToken tk2, Module *pModule1, Module *pModule2, TokenPairList *pVisited)
 {
 #if !defined(DACCESS_COMPILE) && defined(FEATURE_TYPEEQUIVALENCE)
@@ -3415,7 +3417,7 @@ BOOL CompareTypeDefsForEquivalence(mdToken tk1, mdToken tk2, Module *pModule1, M
 #endif //!defined(DACCESS_COMPILE) && defined(FEATURE_COMINTEROP)
 }
 
-
+// TypeSpec not supported, TypeRef will resolve, TypeEquivalence is concerned
 BOOL CompareTypeTokens(mdToken tk1, mdToken tk2, ModuleBase *pModule1, ModuleBase *pModule2, TokenPairList *pVisited /*= NULL*/)
 {
     CONTRACTL
@@ -3644,6 +3646,7 @@ static void ConsumeCustomModifiers(PCCOR_SIGNATURE& pSig, PCCOR_SIGNATURE pEndSi
 //---------------------------------------------------------------------------------------
 //
 // Compare the next elements in two sigs.
+// token within will be considered under type equivalent
 //
 // static
 BOOL
@@ -4162,7 +4165,7 @@ MetaSig::CompareElementType(
 
 
 //---------------------------------------------------------------------------------------
-//
+// Substitution must not be null & !IsNull
 BOOL
 MetaSig::CompareTypeDefsUnderSubstitutions(
     MethodTable *        pTypeDef1,
@@ -4396,7 +4399,7 @@ MetaSig::CompareMethodSigs(
     TokenPairList visited{ pVisited };
 
     if (ArgCount1 != ArgCount2)
-    {
+    { // TBC
         if ((callConv & IMAGE_CEE_CS_CALLCONV_MASK) != IMAGE_CEE_CS_CALLCONV_VARARG)
             return FALSE;
 

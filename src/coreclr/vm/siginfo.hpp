@@ -378,10 +378,12 @@ private:
 // Any type variables in <inst_n> are treated as "free".
 //
 class Substitution
-{
+{ 
 private:
     ModuleBase *         m_pModule; // Module in which instantiation lives (needed to resolve typerefs)
-    SigPointer           m_sigInst; // may point to TypeSpec, 位置在ntypars之后的样子，对于valuetype好像是空
+    SigPointer           m_sigInst; // may point to TypeSpec, 位置在ntypars之后的样子，对于valuetype好像是空(TBC: 为空的时候后面怎么拿到计算substitution)
+    // m_sigInst是说instantiation，比如parent是generic,那就是每个generic argument。
+    // 而m_pNext说的是在sig里面的var, mvar应该用哪个代替。
     const Substitution * m_pNext;   // 指向子类
 
 public:
@@ -954,7 +956,7 @@ class MetaSig
             TokenPairList*  Visited;
 
             // Boolean indicating if custom modifiers should
-            // be compared.
+            // be compared. ;; ignore IL CustomMod
             bool IgnoreCustomModifiers;
 
             CompareState() = default;

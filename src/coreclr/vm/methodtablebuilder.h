@@ -32,6 +32,7 @@ public:
     struct bmtGenericsInfo
     {
         // 包括这个type的type parameters, method的method parameters, 像是ELEMENT_TYPE_VAR这种，在这里以TypeVarTypeDesc的形式表示
+        // inst of CreateTypeHandleForTypeDefThrowing + null for method
         SigTypeContext typeContext;     // Type context used for metadata parsing
         // 请参考“Design and Implementation of Generics for the .NET Common Language Runtime”，基本上就是说这个T在各个地方（field，method之类的）可能的使用情况。比如说 T, List<T>, Dictionary<T, List<T>> ... 然后是在处理过程中动态生成的，所以初始化为1对于Generic type.
         WORD numDicts;                  // Number of dictionaries including this class
@@ -41,6 +42,7 @@ public:
         BOOL fContainsGenericVariables; // TRUE if this is an open type // 嗯，和fTypicalInstantiation的区别的是什么？
 
         inline bmtGenericsInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
+        // pass in from loader
         inline DWORD GetNumGenericArgs() const { LIMITED_METHOD_CONTRACT; return typeContext.m_classInst.GetNumArgs(); }
         inline BOOL HasInstantiation() const { LIMITED_METHOD_CONTRACT; return typeContext.m_classInst.GetNumArgs() != 0; }
         inline BOOL IsTypicalTypeDefinition() const { LIMITED_METHOD_CONTRACT; return !HasInstantiation() || fTypicalInstantiation; }
@@ -167,9 +169,9 @@ private:
     WORD GetNumHandleThreadStatics() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->GetNumHandleThreadStatics(); }
     WORD GetNumStaticFields() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->GetNumStaticFields(); }
     WORD GetNumInstanceFields() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->GetNumInstanceFields(); }
-    BOOL IsInterface() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsInterface(); }
+    BOOL IsInterface() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsInterface(); } // !TypeDef's flag tdInterface
     BOOL HasOverlaidField() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasOverlaidField(); }
-    BOOL IsComImport() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsComImport(); }
+    BOOL IsComImport() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsComImport(); } // !TypeDef's flag tdImport
 #ifdef FEATURE_COMINTEROP
     void SetIsComClassInterface() { WRAPPER_NO_CONTRACT; GetHalfBakedClass()->SetIsComClassInterface(); }
 #endif // FEATURE_COMINTEROP
@@ -178,7 +180,7 @@ private:
     BOOL IsValueClass() { WRAPPER_NO_CONTRACT; return bmtProp->fIsValueClass; }
     BOOL IsUnsafeValueClass() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsUnsafeValueClass(); }
     BOOL IsAbstract() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsAbstract(); }
-    BOOL HasLayout() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasLayout(); }
+    BOOL HasLayout() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasLayout(); } // non-generic, TypeDef's flag sequence or explicit
     BOOL IsDelegate() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsDelegate(); }
     BOOL IsNested() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsNested(); }
     BOOL HasFieldsWhichMustBeInited() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasFieldsWhichMustBeInited(); }
@@ -317,7 +319,7 @@ private:
             { WRAPPER_NO_CONTRACT; return GetMethodTable()->GetModule(); }
 
         //-----------------------------------------------------------------------------------------
-        // Returns the runtime MethodTable for the type.
+        // Returns the runtime MethodTable for the type. ;;GetCanonicalMethodTable of Extends
         MethodTable *
         GetMethodTable() const
             { LIMITED_METHOD_CONTRACT; return m_pMT; }
@@ -374,6 +376,7 @@ private:
             mdTypeDef               tok,
             const SigTypeContext &  sigContext);
 
+        // for interface, during builder, parent will be null (注释说是为了不要虚函数)
         //-----------------------------------------------------------------------------------------
         // Returns the parent type. This takes advantage of teh fact that an MD type
         // will always have an RT type as a parent. This could change, at which point
@@ -423,7 +426,7 @@ private:
             { LIMITED_METHOD_CONTRACT; return m_pMT; }
 
         //-----------------------------------------------------------------------------------------
-        // Returns the token for the type.
+        // Returns the token for the type. ;;from loader request
         mdTypeDef
         GetTypeDefToken() const
             { LIMITED_METHOD_CONTRACT; return m_tok;}
@@ -442,13 +445,13 @@ private:
 
     private:
         //-----------------------------------------------------------------------------------------
-        bmtRTType *     m_pParentType;
+        bmtRTType *     m_pParentType; //;CreateTypeChain
         Module *        m_pModule;
         mdTypeDef       m_tok;
-        mdTypeDef       m_enclTok;
-        SigTypeContext  m_sigContext;
+        mdTypeDef       m_enclTok; //;NestedClass.EnclosingClass
+        SigTypeContext  m_sigContext; //;bmtGenericsInfo->typeContext
         Substitution    m_subst;
-        DWORD           m_dwAttrs;
+        DWORD           m_dwAttrs; //;TypeDef.Flags
 
         MethodTable *   m_pMT;
     };  // class bmtMDType
@@ -1281,20 +1284,23 @@ private:
     // --------------------------------------------------------------------------------------------
     struct bmtProperties
     {
-        bool fIsValueClass;                     // valuetype or enum
-        bool fIsEnum;
+        bool fIsValueClass;                     // valuetype or enum (but not system.enum itself)
+        bool fIsEnum;                           // enum (parent is system.enum)
         bool fNoSanityChecks;
         bool fSparse;                           // Set to true if a sparse interface is being used.
-        bool fHasVirtualStaticMethods;          // Set to true if the interface type declares virtual static methods.
+        bool fHasVirtualStaticMethods;          // Set to true if the interface type declares virtual static methods. ;; 1. any implemented interface has enum_flag_HasVirtualStaticMethods
 
         // Com Interop, ComWrapper classes extend from ComObject
-        bool fIsComObjectType;                  // whether this class is an instance of ComObject class
+        bool fIsComObjectType;                  // whether this class is an instance of ComObject class ;; TypeDef's flag tdImport + parent is object + not interface,delegate,etc. ;; Will populate to children
 #ifdef FEATURE_COMINTEROP
-        bool fIsMngStandardItf;                 // Set to true if the interface is a manages standard interface.
-        bool fComEventItfType;                  // Set to true if the class is a special COM event interface.
+        bool fIsMngStandardItf;                 // Set to true if the interface is a manages standard interface. ;; IReflect/IEnumerator/IEnumerable
+        bool fComEventItfType;                  // Set to true if the class is a special COM event interface. ;; interface + ComEventInterfaceAttribute
 #endif // FEATURE_COMINTEROP
 #ifdef FEATURE_TYPEEQUIVALENCE
+// https://learn.microsoft.com/en-us/dotnet/framework/interop/type-equivalence-and-embedded-interop-types
         bool fHasTypeEquivalence;               // Set to true if the class is decorated by TypeIdentifierAttribute, or through some other technique is influenced by type equivalence
+                                                // fIsTypeEquivalent or 实现了任意的 enum_flag_HasTypeEquivalence 的interface or 任意的generic parameter有enum_flag_HasTypeEquivalence
+                                                // populate to children
         bool fIsTypeEquivalent;                 // Set to true if the class is decorated by TypeIdentifierAttribute
 #endif
 
@@ -1574,7 +1580,7 @@ private:
         bmtMethodSlot & operator[](SLOT_INDEX idx) const
             { WRAPPER_NO_CONTRACT; return (*pSlotTable)[idx]; }
 
-        DWORD NumParentPointerSeries;
+        DWORD NumParentPointerSeries; //;parent MT GC desc #series
         MethodNameHash *pParentMethodHash;  // method name -> bmtRTMethod
 
         inline bmtParentInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
@@ -1720,6 +1726,7 @@ private:
         //-----------------------------------------------------------------------------------------
         // Returns a reference to a bool. The value is true if the interface is explicitly
         // declared within the type's interface list; false otherwise.
+        // 只要有一个是就可以，如果由equivalent也没关系
         bool &
         IsDeclaredOnType()
             { LIMITED_METHOD_CONTRACT; return m_declScope.fIsInterfaceDeclaredOnType; }
@@ -1845,6 +1852,9 @@ private:
     // Contains the list of implemented interfaces as an array of bmtInterfaceEntry values.
     struct bmtInterfaceInfo
     {
+// 从topmost parent开始的InterfaceImpl计算，包括transitive。
+// 每一个层级和其parent的结构相同。也就是说每个祖先的interface map都是pInterfaceMap的前缀
+// 但因此存在可能的重复项（因为某个子类的generic实例化导致出现重复，详见ExpandApproxInheritedInterfaces）
         bmtInterfaceEntry * pInterfaceMap;
         DWORD dwInterfaceMapSize;               // count of entries in interface map, # of interface, 去除了那些相继承链上相同的interface
         DWORD dwInterfaceMapAllocated;          // upper bound on size of interface map
@@ -1912,7 +1922,7 @@ private:
 
         //-----------------------------------------------------------------------------------------
         DWORD           dwNumDeclaredNonAbstractMethods; // For calculating approx generic dictionary size
-        DWORD           dwNumberMethodImpls;    // Number of method impls defined for this type
+        DWORD           dwNumberMethodImpls;    // Number of method impls defined for this type ;!MethodImpl #, IL .override (通常是显示实现的interface函数，还包括'Covariant Return Methods'详见runtime doc)
         DWORD           dwNumberInexactMethodImplCandidates; // Number of inexact method impl candidates (used for type equivalent interfaces)
 
         //-----------------------------------------------------------------------------------------
@@ -1979,28 +1989,35 @@ private:
         // performed on the array.
         struct MethodImplTokenPair
         {
-            mdToken methodBody;             // MethodDef's for the bodies of MethodImpls. Must be defined in this type.
-            mdToken methodDecl;             // Method token that body implements. Is a MethodDef or MemberRef
+            mdToken methodBody;             // MethodDef's for the bodies of MethodImpls. Must be defined in this type. ; !MethodImpl's MethodBody, parent class must be current class (same tok)
+            mdToken methodDecl;             // Method token that body implements. Is a MethodDef or MemberRef ; !MethodImpl's MethodDeclaration
             // Does this methodimpl need to be considered during inexact methodimpl processing
             bool    fConsiderDuringInexactMethodImplProcessing;
             // If when considered during inexact methodimpl processing it does not match any declaration method, throw.
             // This is to detect situations where a methodimpl does not match any method on any equivalent interface.
             bool    fThrowIfUnmatchedDuringInexactMethodImplProcessing;
             UINT32  interfaceEquivalenceSet;// Equivalence set in the interface map to examine
-            bool    fRequiresCovariantReturnTypeChecking;   // declare和body的sig除了return都match，要看是不是允许协变
+            bool    fRequiresCovariantReturnTypeChecking;   // MethodImpl 协变返回值函数，需要在后续检查decl和body的sig里面的return是否满足协变
             static int __cdecl Compare(const void *elem1, const void *elem2);
             static BOOL Equal(const MethodImplTokenPair *elem1, const MethodImplTokenPair *elem2);
         };
 
         //-----------------------------------------------------------------------------------------
-        // init in EnumerateMethodImpls
-        // from MethodImpl
-        // sort by methodBody then methodDecl, duplicate removed
+        // 初始化 EnumerateMethodImpls
+        // 来源 MethodImpl
+        // 排序 methodBody then methodDecl, duplicate removed
         MethodImplTokenPair *rgMethodImplTokens;
+        // 和上面的array一一对应。内容是对应的(所实现的interface的)declaration method sig中的VAR是什么的substitution
+/*
+例子是
+interface I<U> { U M(); }
+class C : I<int> { int I<int>.M(); }
+subst: {Generic, class#I`1, 1GP}(stripped), [int]
+*/
         Substitution *pMethodDeclSubsts;    // Used to interpret generic variables in the interface of the declaring type
 
-        bool fHasCovariantOverride;
 
+        bool fHasCovariantOverride; // 1.是否存在协变返回值函数MethodImpl
         //-----------------------------------------------------------------------------------------
         inline bmtMetaDataInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
     };  // struct bmtMetaDataInfo
@@ -2034,7 +2051,7 @@ private:
         DWORD NumInlineArrayElements;
 
         bool  fIsAllGCPointers;
-        bool  fIsByRefLikeType;
+        bool  fIsByRefLikeType; // IsByRefLikeAttribute
         bool  fHasFixedAddressValueTypes;
         bool  fHasSelfReferencingStaticValueTypeField_WithRVA;
 
@@ -2258,7 +2275,7 @@ private:
     // --------------------------------------------------------------------------------------------
     // Takes care of checking against NULL on the pointer returned by GetParentType. Returns true
     // if the type being built has a parent; returns false otherwise.
-    // NOTE: false will typically only be returned for System.Object and interfaces.
+    // NOTE: false will typically only be returned for System.Object and **interfaces**. (and global class i.e. TypeDef#1)
     inline bool
     HasParent()
     {

@@ -6,6 +6,12 @@
 // File: CLASS.H
 //
 
+/*
+Which subclass and where:
+  (CreateClass) fHasLayout ? LayoutEEClass : fDelegate ? DelegateEEClass : EEClass
+  from loader module (ComputeLoaderModuleWorker)'s LowFrequencyHeap
+*/
+
 //
 // NOTE: Even though EEClass is considered to contain cold data (relative to MethodTable), these data
 // structures *are* touched (especially during startup as part of soft-binding). As a result, and given the
@@ -1811,7 +1817,7 @@ private:
     ComCallWrapperTemplate *m_pccwTemplate;   // points to interop data structures used when this type is exposed to COM
 #endif // FEATURE_COMINTEROP
 
-    DWORD m_dwAttrClass;
+    DWORD m_dwAttrClass; // !TypeDef's Flags
     DWORD m_VMFlags;
 
     /*

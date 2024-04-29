@@ -2761,7 +2761,7 @@ ClassLoader::LoadApproxTypeThrowing(
         // Of these, we outlaw instantiated value classes (they can't be interfaces and can't be subclassed)
         IfFailThrowBF(sigptr.GetElemType(&type), BFA_BAD_SIGNATURE, pModule);
 
-        if (type != ELEMENT_TYPE_CLASS)
+        if (type != ELEMENT_TYPE_CLASS) // 这里也直接reject了所有的vauletype?
             pModule->GetAssembly()->ThrowTypeLoadException(pInternalImport, tok, IDS_CLASSLOAD_GENERAL);
 
         mdToken genericTok = 0;
