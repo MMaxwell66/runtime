@@ -181,7 +181,7 @@ private:
     BOOL IsUnsafeValueClass() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsUnsafeValueClass(); }
     BOOL IsAbstract() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsAbstract(); }
     BOOL HasLayout() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasLayout(); } // non-generic, TypeDef's flag sequence or explicit
-    BOOL IsDelegate() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsDelegate(); }
+    BOOL IsDelegate() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsDelegate(); } // parent is MulticastDelegate
     BOOL IsNested() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsNested(); }
     BOOL HasFieldsWhichMustBeInited() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->HasFieldsWhichMustBeInited(); }
     BOOL IsBlittable() { WRAPPER_NO_CONTRACT; return GetHalfBakedClass()->IsBlittable(); }
@@ -819,9 +819,9 @@ private:
     protected:
         //-----------------------------------------------------------------------------------------
         Module *                m_pModule;
-        mdToken                 m_tok;
-        mutable LPCUTF8         m_szName;   // mutable because it is lazily evaluated.
-        mutable PCCOR_SIGNATURE m_pSig;     // mutable because it is lazily evaluated.
+        mdToken                 m_tok; //;!MethodDef tok
+        mutable LPCUTF8         m_szName;   // mutable because it is lazily evaluated.//;MethodDef's Name
+        mutable PCCOR_SIGNATURE m_pSig;     // mutable because it is lazily evaluated.//;MethodDef's Signature
         mutable size_t          m_cSig;     // mutable because it is lazily evaluated.
         const Substitution *    m_pSubst;
 
@@ -1026,13 +1026,50 @@ private:
 
     private:
         //-----------------------------------------------------------------------------------------
-        bmtMDType *       m_pOwningType;
+        bmtMDType *       m_pOwningType; //这个MethodDef所属的tok所对应的
 
-        DWORD             m_dwDeclAttrs;
-        DWORD             m_dwImplAttrs;
-        DWORD             m_dwRVA;
+        DWORD             m_dwDeclAttrs; //;!MethodDef's Flags
+        DWORD             m_dwImplAttrs; //;!MethodDef's ImplFlags
+        DWORD             m_dwRVA; //;!MethodDef's RVA
         // calc in EnumerateClassMethods based on things like attribute, "Determine the method's type"
-        MethodClassification  m_type;               // Specific MethodDesc flavour
+/*
+TODO: 根据CoreLib找一些样例出来
+mcNDirect: (感觉是PInvoke这类的，包括以这种方式实现的internal(QCall))
+    1. !MethodDef's flag PInvokeImpl & !ImplMap's MemberForwarded
+        //TODO 看一眼除了QCall之类的情况
+        e.g., Enum.GetEnumValuesAndNames(LibraryImport QCall)
+            RuntimeHelpers.RunClassConstructor(LibraryImport QCall)
+    2. (!MethodDef's flag PInvokeImpl || !MethodDef's ImplFlag miInternalCall) + no ImplMap + not COM + RVA!=0
+mcComInterop:
+    1. (!MethodDef's flag PInvokeImpl || !MethodDef's ImplFlag miInternalCall) + no ImplMap + COM + not special name
+    2. interface abstract (因为无法排除可能性，所以当作COM)
+        e.g., IConvertible.CompareTo
+mcFCall: (感觉是internal的一些函数)
+    1. mcComInterop case#1 but special name
+    2. (!MethodDef's flag PInvokeImpl || !MethodDef's ImplFlag miInternalCall) + no ImplMap + not COM + RVA=0
+        e.g., Object.GetType(MethodImpl.InternalCall+Instrict), ValueType.CanCompareBits(MethodImpl.InternalCall), ValueType.GetHashCode(MethodImpl.InternalCall)
+    3. ImplFlag runtime (必须是delegate非static非abstract) .ctor
+        e.g., Func`2..ctor
+    4. IReflect/IEnumerator/IEnumerable
+        e.g., IReflect.GetMethod
+mcEEImpl:
+    1. ImplFlag runtime (delegate) Invoke/BeginInvoke/EndInvoke
+        e.g., Func`2.Invoke
+mcInstantiated:
+    1. MethodDef signature Generic calling conv
+        e.g., Enum.GetEnumInfo<>
+mcIL:
+    1. interface && static
+        e.g., IParsable`1.Parse, IBitwiseOperators`3.op_BitwiseAnd
+    2. generic interface && fSharedByGenericInstantiations
+        e.g., IComparable`1.CompareTo
+    3. interface method default情况(尚不清楚这个default描述是不是准确)
+        e.g., INumberBase`1.System.IUtf8SpanFormattable.TryFormat & fSharedByGenericInstantiations = 0
+            IBinaryInteger`1.WriteBigEndian
+    4. 非特殊情况
+        e.g., Object.MemberwiseClone, Object..ctor, Object.Finalize, Object.ToString, Object.Equals
+*/
+        MethodClassification  m_type;               // Specific MethodDesc flavour根据MethodDef等信息计算出来的Method分类
         METHOD_IMPL_TYPE  m_implType;           // Whether or not the method is a methodImpl body
         MethodSignature   m_methodSig;
 
@@ -1287,8 +1324,8 @@ private:
         bool fIsValueClass;                     // valuetype or enum (but not system.enum itself)
         bool fIsEnum;                           // enum (parent is system.enum)
         bool fNoSanityChecks;
-        bool fSparse;                           // Set to true if a sparse interface is being used.
-        bool fHasVirtualStaticMethods;          // Set to true if the interface type declares virtual static methods. ;; 1. any implemented interface has enum_flag_HasVirtualStaticMethods
+        bool fSparse;                           // Set to true if a sparse interface is being used. ;!MethodDef _VTblGap 存在，关于COM的东西
+        bool fHasVirtualStaticMethods;          // Set to true if the interface type declares virtual static methods. ;; 1. any implemented interface has enum_flag_HasVirtualStaticMethods 2. any !MethodDef's flag is virtual|static
 
         // Com Interop, ComWrapper classes extend from ComObject
         bool fIsComObjectType;                  // whether this class is an instance of ComObject class ;; TypeDef's flag tdImport + parent is object + not interface,delegate,etc. ;; Will populate to children
@@ -1420,10 +1457,11 @@ private:
 
         // Used to keep track of the default and static type constructors.
         // init in ValidateMethods
-        bmtMDMethod * pDefaultCtor;
-        bmtMDMethod * pCCtor;
+        bmtMDMethod * pDefaultCtor; // m_declaredMethods[index_of_no_param_ctor]
+        bmtMDMethod * pCCtor; // m_declaredMethods[index_of_cctor]
 
         // Upper bound on size of vtable. Used in initializing pSlotTable
+        // 1. For all MethoDef(excl. _VTblGap)
         DWORD dwMaxVtableSize;
 
         // Used to keep track of how many virtual and total slots are in the vtable
@@ -1916,12 +1954,13 @@ private:
         //-----------------------------------------------------------------------------------------
         // The array and bounds of the bmtMDMethod array
         // init in EnumerateClassMethods, from MethodDef
-        SLOT_INDEX      m_cDeclaredMethods;     // inc in AddDeclaredMethod, not include _VtblGap
-        SLOT_INDEX      m_cMaxDeclaredMethods;  // count from Metadata Method Table
+        SLOT_INDEX      m_cDeclaredMethods;     // inc in AddDeclaredMethod, not include _VtblGap //All 当前class的MethodDef (except _VTblGap)
+        SLOT_INDEX      m_cMaxDeclaredMethods;  // count from Metadata Method Table ;#!MethodDef
+        // 1. All 当前class的MethodDef (except _VTblGap)
         bmtMDMethod **  m_rgDeclaredMethods;
 
         //-----------------------------------------------------------------------------------------
-        DWORD           dwNumDeclaredNonAbstractMethods; // For calculating approx generic dictionary size
+        DWORD           dwNumDeclaredNonAbstractMethods; // For calculating approx generic dictionary size ;!#MethodDef(excl. _VTblGap)'s Flag !Abstract
         DWORD           dwNumberMethodImpls;    // Number of method impls defined for this type ;!MethodImpl #, IL .override (通常是显示实现的interface函数，还包括'Covariant Return Methods'详见runtime doc)
         DWORD           dwNumberInexactMethodImplCandidates; // Number of inexact method impl candidates (used for type equivalent interfaces)
 

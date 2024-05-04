@@ -851,7 +851,8 @@ HRESULT EEClass::AddMethodDesc(
 // in accordance with their variance annotations
 // The signature is assumed to be well-formed but indices and arities might not be correct
 //
-// generic是token本身的generic, psig是toke实现的interface的，里面的type parameter就是token的
+// 1.generic是token本身的generic, psig是toke实现的interface的，里面的type parameter就是token的
+// 2.psig是MethodDef's Signature
 BOOL
 EEClass::CheckVarianceInSig(
     DWORD               numGenericArgs,
@@ -1023,6 +1024,7 @@ EEClass::CheckVarianceInSig(
                 IfFailThrow(psig.GetData(&cArgs));
 
                 // Conservatively, assume non-variance of function pointer types
+// 这里的编译器支持好像也不完善，比如`interface I<in U>{ void M(delegate*<U>) }`可以编译过，但是运行时创建一个实现这个接口的类会导致运行时异常
                 if (!CheckVarianceInSig(numGenericArgs, pVarianceInfo, pModule, psig, gpNonVariant))
                     return FALSE;
 
@@ -2927,7 +2929,7 @@ void SparseVTableMap::RecordGap(WORD StartMTSlot, WORD NumSkipSlots)
 
 //*******************************************************************************
 // Finish creation of mapping list.
-void SparseVTableMap::FinalizeMapping(WORD TotalMTSlots)
+void SparseVTableMap::FinalizeMapping(WORD TotalMTSlots /*#!MethodDef (excl. _VTblGap)*/)
 {
     STANDARD_VM_CONTRACT;
 

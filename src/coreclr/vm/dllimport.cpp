@@ -3142,6 +3142,7 @@ void NDirect::GetCallingConvention_IgnoreErrors(_In_ MethodDesc* pMD, _Out_opt_ 
 // S_FALSE = no
 // FAILED  = unknown because something failed.
 //---------------------------------------------------------
+// MethodDef's flag PInvokeImpl & !ImplMap's MemberForwarded
 /*static*/
 HRESULT NDirect::HasNAT_LAttribute(IMDInternalImport *pInternalImport, mdToken token, DWORD dwMemberAttrs)
 {

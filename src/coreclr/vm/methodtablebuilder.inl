@@ -70,7 +70,7 @@ inline mdMethodDef MethodTableBuilder::DeclaredMethodIterator::Token() const
 }
 
 //***************************************************************************************
-inline DWORD MethodTableBuilder::DeclaredMethodIterator::Attrs()
+inline DWORD MethodTableBuilder::DeclaredMethodIterator::Attrs()//;!MethodDef's Flags
 {
     LIMITED_METHOD_CONTRACT;
     return GetMDMethod()->GetDeclAttrs();

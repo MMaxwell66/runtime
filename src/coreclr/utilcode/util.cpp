@@ -1860,7 +1860,7 @@ HRESULT validateTokenSig(
             FALLTHROUGH;
 
         case mdtMemberRef:
-            if(i == IMAGE_CEE_CS_CALLCONV_FIELD) return validateOneArg(tk, &sig, NULL, pImport, TRUE);
+            if(i == IMAGE_CEE_CS_CALLCONV_FIELD) return validateOneArg(tk, &sig, NULL, pImport, TRUE); // MethodDef fallthrough的时候也允许field?
 
             // EXPLICITTHIS and native call convs are for stand-alone sigs only (for calli)
             if(((i != IMAGE_CEE_CS_CALLCONV_DEFAULT)&&( i != IMAGE_CEE_CS_CALLCONV_VARARG))
@@ -1901,7 +1901,7 @@ HRESULT validateTokenSig(
 
     // Validate the return type and the arguments.
     // (at this moment ulArgCount = num.args+1, ulArgIx = (standalone sig. ? 1 :0); )
-    for(; ulArgIx < ulArgCount; ulArgIx++)
+    for(; ulArgIx < ulArgCount; ulArgIx++) // I think it should be '<=', opened issue https://github.com/dotnet/runtime/issues/96831
     {
         if(FAILED(hr = validateOneArg(tk, &sig, &ulNSentinels, pImport, (ulArgIx!=0)))) return hr;
     }

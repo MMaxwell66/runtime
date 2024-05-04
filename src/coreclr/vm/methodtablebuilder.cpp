@@ -2741,7 +2741,7 @@ MethodTableBuilder::EnumerateClassMethods()
     bmtMethod->m_cMaxDeclaredMethods = (SLOT_INDEX)cMethAndGaps;
     bmtMethod->m_cDeclaredMethods = 0;
     bmtMethod->m_rgDeclaredMethods = new (GetStackingAllocator())
-        bmtMDMethod *[bmtMethod->m_cMaxDeclaredMethods];
+        bmtMDMethod *[bmtMethod->m_cMaxDeclaredMethods]; // 会跳过 _VTblGap, MethodDef会有很多检查，详见EnumerateClassMethods
 
     enum { SeenCtor = 1, SeenInvoke = 2, SeenBeginInvoke = 4, SeenEndInvoke = 8};
     unsigned delegateMethodsSeen = 0;
@@ -2807,7 +2807,7 @@ MethodTableBuilder::EnumerateClassMethods()
 
         // Signature validation
         if (!bmtProp->fNoSanityChecks && !isVtblGap)
-        {
+        { // 检查hasthis和static匹配, no varag, signature本身等
             hr = validateTokenSig(tok,pMemberSignature,cMemberSignature,dwMemberAttrs,pMDInternalImport);
             if (FAILED(hr))
             {
@@ -2816,7 +2816,7 @@ MethodTableBuilder::EnumerateClassMethods()
         }
 
         bool hasGenericMethodArgsComputed;
-        bool hasGenericMethodArgs = this->GetModule()->m_pMethodIsGenericMap->IsGeneric(tok, &hasGenericMethodArgsComputed);
+        bool hasGenericMethodArgs = this->GetModule()->m_pMethodIsGenericMap->IsGeneric(tok, &hasGenericMethodArgsComputed); // is method itself generic?
         if (!hasGenericMethodArgsComputed)
         {
             if (pMemberSignature == NULL)
@@ -2849,7 +2849,7 @@ MethodTableBuilder::EnumerateClassMethods()
             }
 
             uint32_t numGenericMethodArgs = hEnumTyPars.EnumGetCount();
-            if (numGenericMethodArgs != 0)
+            if (numGenericMethodArgs != 0) // 不检查数量？
             {
                 HENUMInternalHolder hEnumGenericPars(pMDInternalImport);
 
@@ -3327,7 +3327,7 @@ MethodTableBuilder::EnumerateClassMethods()
         implType = METHOD_IMPL_NOT;
         for (DWORD impls = 0; impls < bmtMethod->dwNumberMethodImpls; impls++)
         {
-            if (bmtMetaData->rgMethodImplTokens[impls].methodBody == tok)
+            if (bmtMetaData->rgMethodImplTokens[impls].methodBody == tok) //是不是可以二分查找?
             {
                 implType = METHOD_IMPL;
                 break;

@@ -582,7 +582,7 @@ class EEClassOptionalFields
     //
 
 #ifdef FEATURE_COMINTEROP
-    SparseVTableMap *m_pSparseVTableMap;
+    SparseVTableMap *m_pSparseVTableMap; // 记录了MethodDef中的_VTblGap的分布
 
     TypeHandle m_pCoClassForIntf;  // @TODO: Coclass for an interface
 
@@ -1138,7 +1138,7 @@ public:
         SetPackableField(EEClass_Field_NumMethods, wNumMethods);
     }
 
-    /*
+    /*!TypeDef's Flags
      * Cached metadata for this class (GetTypeDefProps)
      */
     inline DWORD GetAttrClass()
@@ -1794,7 +1794,7 @@ public:
 private:
     // Layout rest of fields below from largest to smallest to lessen the chance of wasting bytes with
     // compiler injected padding (especially with the difference between pointers and DWORDs on 64-bit).
-    PTR_EEClassOptionalFields m_rpOptionalFields;
+    PTR_EEClassOptionalFields m_rpOptionalFields; // From LFH
 
     // TODO: Remove this field. It is only used by SOS and object validation for stress.
     PTR_MethodTable m_pMethodTable;
