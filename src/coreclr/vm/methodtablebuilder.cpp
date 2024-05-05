@@ -10850,7 +10850,7 @@ MethodTableBuilder::SetupMethodTable2(
     // Keep bmtInterface data around since we no longer write the flags (IsDeclaredOnType and
     // IsImplementedByParent) into the interface map (these flags are only required during type loading).
 
-    {
+    { // 这里创建了method的code所在的空间
         for (MethodDescChunk *pChunk = GetHalfBakedClass()->GetChunks(); pChunk != NULL; pChunk = pChunk->GetNextChunk())
         {
             // Make sure that temporary entrypoints are create for methods. NGEN uses temporary

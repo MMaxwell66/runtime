@@ -9,6 +9,10 @@
 // file:../../doc/BookOfTheRuntime/ClassLoader/MethodDescDesign.doc
 //
 
+/*分类：
+- IsIntrinsic
+*/
+
 #include "common.h"
 #include "excep.h"
 #include "dbginterface.h"

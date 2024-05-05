@@ -5,6 +5,8 @@
 //
 // ===========================================================================
 
+// 💡💡💡 Read 'docs/design/features/code-versioning.md'
+
 #include "common.h"
 #include "codeversion.h"
 #include "patchpointinfo.h"

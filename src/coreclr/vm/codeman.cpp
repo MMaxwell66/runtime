@@ -1920,6 +1920,12 @@ BOOL EEJitManager::LoadJIT()
 #ifdef _DEBUG
     IfFailThrow(CLRConfig::GetConfigValue(CLRConfig::INTERNAL_JitPath, &mainJitPath));
 #endif
+/*
+(optional)jitStartup()
+ICorJitCompiler* pICorJitCompiler = getJit()
+pICorJitCompiler->getVersionIdentifier()
+pICorJitCompiler->setTargetOS()
+*/
     LoadAndInitializeJIT(ExecutionManager::GetJitName() DEBUGARG(mainJitPath), &m_JITCompiler, &newJitCompiler, &g_JitLoadData, getClrVmOs());
 #endif // !FEATURE_MERGE_JIT_AND_ENGINE
 

@@ -2174,7 +2174,7 @@ private:
     // The one and only AppDomain
     SPTR_DECL(AppDomain, m_pTheAppDomain);
 
-    SString         m_friendlyName;
+    SString         m_friendlyName; // is this the one pass in when coreclr_initialize. A: yes, at least one possible source
     PTR_Assembly    m_pRootAssembly;    // entry point assembly
 
     // General purpose flags.

@@ -494,7 +494,7 @@ TADDR Precode::AllocateTemporaryEntryPoints(MethodDescChunk *  pChunk,
         temporaryEntryPoints = (TADDR)pamTracker->Track(pStubHeap->AllocAlignedMem(totalSize, 1));
         TADDR entryPoint = temporaryEntryPoints;
         for (int i = 0; i < count; i++)
-        {
+        { // code page的数据在LoaderHeap alloc page的时候就setup了，见LoaderHeap ctor的参数，这里init的是data page
             ((Precode *)entryPoint)->Init((Precode *)entryPoint, t, pMD, pLoaderAllocator);
 
             _ASSERTE((Precode *)entryPoint == GetPrecodeForTemporaryEntryPoint(temporaryEntryPoints, i));

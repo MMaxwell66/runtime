@@ -9,6 +9,9 @@
 // ===========================================================================
 //
 
+/*
+normal entry point for JIT: `JitCompileCode`
+*/
 
 #include "common.h"
 #include "vars.hpp"
