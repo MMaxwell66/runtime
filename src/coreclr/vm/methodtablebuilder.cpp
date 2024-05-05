@@ -1021,7 +1021,7 @@ MethodTableBuilder::bmtMDType::bmtMDType(
 
 //*******************************************************************************
 MethodTableBuilder::bmtRTMethod::bmtRTMethod(
-    bmtRTType *     pOwningType,
+    bmtRTType *     pOwningType, // no CheckPoint here
     MethodDesc *    pMD)
     : m_pOwningType(pOwningType),
       m_pMD(pMD),
@@ -1070,7 +1070,7 @@ MethodTableBuilder::bmtMDMethod::bmtMDMethod(
         CONTRACTL_END;
     }
 //*******************************************************************************
-void
+void // TBC: 这里的逻辑可能还是要看完一遍MethodTable之后再确认一下
 MethodTableBuilder::ImportParentMethods()
 {
     STANDARD_VM_CONTRACT;
@@ -1086,7 +1086,7 @@ MethodTableBuilder::ImportParentMethods()
     bmtParent->pSlotTable = new (GetStackingAllocator())
         bmtMethodSlotTable(numMethods, GetStackingAllocator());
 
-    MethodTable::MethodIterator it(GetParentMethodTable());
+    MethodTable::MethodIterator it(GetParentMethodTable()); // MethodDataObject
     for (;it.IsValid(); it.Next())
     {
         MethodDesc *  pDeclDesc = NULL;
@@ -1098,7 +1098,7 @@ MethodTableBuilder::ImportParentMethods()
         {
             pDeclDesc = it.GetDeclMethodDesc();
             pDeclMT = pDeclDesc->GetMethodTable();
-            pImplDesc = it.GetMethodDesc();
+            pImplDesc = it.GetMethodDesc(); // pDeclDesc == pImplDesc->GetDeclMethodDesc(slotNumber)
             pImplMT = pImplDesc->GetMethodTable();
         }
         else
@@ -1633,6 +1633,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
     ImportParentMethods();
 
     // This will allocate the working versions of the VTable and NonVTable in bmtVT
+// 只是计算了 dwMaxVtableSize, 然后 allocate bmtVT->pSlotTable 的数组以供之后使用
     AllocateWorkingSlotTables();
 
     // Allocate a MethodDesc* for each method (needed later when doing interfaces), and a FieldDesc* for each field
@@ -3505,7 +3506,7 @@ MethodTableBuilder::EnumerateClassFields()
 
         if (IsFdStatic(dwMemberAttrs))
         {
-            if (!IsFdLiteral(dwMemberAttrs))    // literal不是在生成il的时候就处理掉的吗？还是说处理更多的可能性？
+            if (!IsFdLiteral(dwMemberAttrs))
             {
 #ifdef FEATURE_TYPEEQUIVALENCE
                 if (bmtProp->fIsTypeEquivalent)
@@ -3553,7 +3554,7 @@ MethodTableBuilder::EnumerateClassFields()
     {
         BuildMethodTableThrowException(COR_E_BADIMAGEFORMAT, IDS_CLASSLOAD_BAD_FIELD_COUNT, mdTokenNil);
     }
-
+//根据一个例子来看enum有一个__Value的instance field，然后其他的都是literal
     if(IsEnum() && (bmtEnumFields->dwNumInstanceFields==0))
     {
         BuildMethodTableThrowException(BFA_INSTANCE_FIELD_IN_ENUM);
@@ -3666,7 +3667,7 @@ VOID    MethodTableBuilder::AllocateWorkingSlotTables()
 #endif // 0
     }
 
-    S_UINT32 cEntries = S_UINT32(2) * S_UINT32(NumDeclaredMethods());
+    S_UINT32 cEntries = S_UINT32(2) * S_UINT32(NumDeclaredMethods()); // SLOT_INDEX is uint16, meaningless
     if (cEntries.IsOverflow())
     {
         ThrowHR(COR_E_OVERFLOW);

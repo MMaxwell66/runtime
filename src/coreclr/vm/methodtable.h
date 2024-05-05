@@ -4,6 +4,22 @@
 // File: methodtable.h
 //
 
+/*
+```
++0x000 __VFN_table : Ptr64 
++0x008 m_cRef           : Uint4B ;引用计数
++0x010 m_pImplMT        : Ptr64 MethodTable
++0x018 m_pDeclMT        : Ptr64 MethodTable
+```
+0. 在分布上，首先是Virtual Methods
+1. MethodDataObject : MethodData
+    used when decl == impl, not interface
+```
++0x020 m_iNextChainDepth : Uint4B
++0x024 m_containsMethodImpl : Int4B
++0x028 m_rgEntries      : [0] MethodTable::MethodDataObject::MethodDataObjectEntry
+```
+*/
 #ifndef _METHODTABLE_H_
 #define _METHODTABLE_H_
 
@@ -2948,10 +2964,10 @@ protected:
         BOOL PopulateNextLevel();
 
         // This is used in staged map decoding - it indicates which type we will next decode.
-        UINT32       m_iNextChainDepth;
+        UINT32       m_iNextChainDepth; // 继承链上的第几个
         static const UINT32 MAX_CHAIN_DEPTH = UINT32_MAX;
 
-        BOOL m_containsMethodImpl;
+        BOOL m_containsMethodImpl; // 目前继承链上是否又MT的ContainsMethodImpls返回true
 
         // NOTE: Use of these APIs are unlocked and may appear to be erroneous. However, since calls
         //       to ProcessMap will result in identical values being placed in the MethodDataObjectEntry
@@ -3243,7 +3259,8 @@ public:
     // This includes new static methods, new non-virtual methods, and any overrides
     // of the parent's virtual methods. It does not include virtual method implementations
     // provided by the parent
-    // 这个Iterator只会访问MethodDef里面那些，也就是那些定义在这个class上面的实现
+    // 迭代MT中的MethodDesc
+    // （这段话不对吧？）这个Iterator只会访问MethodDef里面那些，也就是那些定义在这个class上面的实现
     class IntroducedMethodIterator
     {
     public:

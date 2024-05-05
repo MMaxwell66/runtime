@@ -34,6 +34,11 @@
 
 // Describe an array of FIELD_COUNT DWORDs. Each entry is addressed via a zero-based index and is expected to
 // frequently contain a small integer and remain frozen after initialization.
+/*
+每个元素是一个uint32_t
+pack模式下是一个bit array,5bits指示长度[1,32],接下来的bits记录了数据
+But: https://github.com/dotnet/runtime/commit/8b581cad04d0fc1728b7c427ba36fa68d561ba20
+*/
 template <DWORD FIELD_COUNT>
 class PackedDWORDFields
 {

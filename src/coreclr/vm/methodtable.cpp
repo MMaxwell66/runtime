@@ -70,6 +70,7 @@
 typedef int (__cdecl *UTF8StringCompareFuncPtr)(const char *, const char *);
 
 MethodDataCache *MethodTable::s_pMethodDataCache = NULL;
+// removed: https://github.com/dotnet/runtime/commit/de048989e77a839a4db0ea6aee4e5d156eb48968#diff-8b4d839010e3c7e363eb430d3efed40b0f9a01a7661e16f753374598ded88f8c
 BOOL MethodTable::s_fUseMethodDataCache = FALSE;
 BOOL MethodTable::s_fUseParentMethodData = FALSE;
 
@@ -7688,7 +7689,7 @@ void MethodTable::MethodDataObject::FillEntryDataForAncestor(MethodTable * pMT)
     if (pMT->GetClass()->ContainsMethodImpls())
         m_containsMethodImpl = TRUE;
 
-    if (m_containsMethodImpl && pMT != m_pDeclMT)
+    if (m_containsMethodImpl && pMT != m_pDeclMT) // TBC: 这个分支什么意思？
         return;
 
     unsigned nVirtuals = pMT->GetNumVirtuals();
@@ -7717,7 +7718,7 @@ void MethodTable::MethodDataObject::FillEntryDataForAncestor(MethodTable * pMT)
 
         MethodDataObjectEntry * pEntry = GetEntry(slot);
 
-        if (pEntry->GetDeclMethodDesc() == NULL)
+        if (pEntry->GetDeclMethodDesc() == NULL) // 不是覆写而是bottomest,所以不是引入这个method的class? 另外至少目前Decl这的逻辑decl和impl是恒等的
         {
             pEntry->SetDeclMethodDesc(pMD);
         }
@@ -7730,8 +7731,8 @@ void MethodTable::MethodDataObject::FillEntryDataForAncestor(MethodTable * pMT)
 } // MethodTable::MethodDataObject::FillEntryDataForAncestor
 
 //==========================================================================================
-// 比较草率的分析，感觉这个主要考虑了一些继承的问题。下面的PopulateNextLevel会去一层层的读取parent，知道找到了想要的slot，但是其中根据不同情况这个“找到”的定义需要细看。
-// 包括想Impl和Desc具体指代什么都需要在考量一下。
+// 比较草率的分析，感觉这个主要考虑了一些继承的问题。下面的PopulateNextLevel会去一层层的读取parent，直到找到了想要的slot，但是其中根据不同情况这个“找到”的定义需要细看。
+// 包括想Impl和Desc具体指代什么都需要在考量一下。感觉Desc就类似c++ vptr，表示了这个是哪个class的哪个virtual func, 而impl则是实际实现的code，也就是填在desc的vptr slot里面的func
 MethodDesc * MethodTable::MethodDataObject::GetDeclMethodDesc(UINT32 slotNumber)
 {
     WRAPPER_NO_CONTRACT;

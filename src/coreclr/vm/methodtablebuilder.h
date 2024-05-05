@@ -1390,7 +1390,7 @@ mcIL:
         }
 
         //-----------------------------------------------------------------------------------------
-        // The current size of the used entries in the array.
+        // The current size of the used entries in the array. ;GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()
         SLOT_INDEX
         GetSlotCount()
             { LIMITED_METHOD_CONTRACT; return m_curSlotIdx; }
@@ -1406,8 +1406,9 @@ mcIL:
       private:
         //-----------------------------------------------------------------------------------------
         SLOT_INDEX      m_curSlotIdx;
-        SLOT_INDEX      m_maxSlotIdx;
-        bmtMethodSlot * m_rgSlots;
+        SLOT_INDEX      m_maxSlotIdx; // parent: GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()
+            // current: dwMaxVtableSize(v3) + All 当前class的MethodDef (except _VTblGap)
+        bmtMethodSlot * m_rgSlots; // parent: [GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()] 根据MethodTable::GetMethodData(pParentMT)计算得出(ImportParentMethods)具体内容和使用需要再看看
 
         template <typename INDEX_TYPE>
         void
@@ -1462,6 +1463,8 @@ mcIL:
 
         // Upper bound on size of vtable. Used in initializing pSlotTable
         // 1. For all MethoDef(excl. _VTblGap)
+        // 2. IsValueClass (double) + All 当前class的MethodDef (except _VTblGap)
+        // 3. GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()
         DWORD dwMaxVtableSize;
 
         // Used to keep track of how many virtual and total slots are in the vtable
@@ -1894,7 +1897,7 @@ mcIL:
 // 每一个层级和其parent的结构相同。也就是说每个祖先的interface map都是pInterfaceMap的前缀
 // 但因此存在可能的重复项（因为某个子类的generic实例化导致出现重复，详见ExpandApproxInheritedInterfaces）
         bmtInterfaceEntry * pInterfaceMap;
-        DWORD dwInterfaceMapSize;               // count of entries in interface map, # of interface, 去除了那些相继承链上相同的interface
+        DWORD dwInterfaceMapSize;               // count of entries in interface map, # of interface, ~~去除了那些相继承链上相同的interface~~ 见上行
         DWORD dwInterfaceMapAllocated;          // upper bound on size of interface map
 #ifdef _DEBUG
         // Should we inject interface duplicates for this type? (Parent has its own value stored in
@@ -1920,21 +1923,21 @@ mcIL:
     struct bmtEnumFieldInfo
     {
         // Counts instance fields
-        DWORD dwNumInstanceFields;  // not literal, not static
+        DWORD dwNumInstanceFields;  //;# !Field !static && !literal
 
         // Counts both regular statics and thread statics. Currently RVA
         // get lumped in with "regular statics".
-        DWORD dwNumStaticFields;
+        DWORD dwNumStaticFields; //;# !Field static && !literal, (incl. dwNumThreadStaticFields)
         DWORD dwNumStaticObjRefFields;
         DWORD dwNumStaticBoxedFields;
 
         // We keep a separate count for just thread statics
-        DWORD dwNumThreadStaticFields;      // System.ThreadStaticAttribute + static field
+        DWORD dwNumThreadStaticFields;      // !Field static && !literal + System.ThreadStaticAttribute
         DWORD dwNumThreadStaticObjRefFields;
         DWORD dwNumThreadStaticBoxedFields;
 
         // dwNumStaticFields + dwNumInstanceFields
-        DWORD dwNumDeclaredFields;           // For calculating amount of FieldDesc's to allocate
+        DWORD dwNumDeclaredFields;           // For calculating amount of FieldDesc's to allocate //; dwNumStaticFields + dwNumInstanceFields = #!Field !literal
 
         IMDInternalImport *m_pInternalImport;
 
@@ -2019,9 +2022,9 @@ mcIL:
     {
         //-----------------------------------------------------------------------------------------
         // init in EnumerateClassFields
-        DWORD    cFields;                   // # meta-data fields of this class
-        mdToken *pFields;                   // Enumeration of metadata fields
-        DWORD   *pFieldAttrs;               // Enumeration of the attributes of the fields
+        DWORD    cFields;                   // # meta-data fields of this class //;#!Field
+        mdToken *pFields;                   // Enumeration of metadata fields //; tok of !Field
+        DWORD   *pFieldAttrs;               // Enumeration of the attributes of the fields //; !Field's Flags
 
         //-----------------------------------------------------------------------------------------
         // Stores the method impl tokens as a pair structure to enable qsort to be
@@ -2068,7 +2071,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
     {
         //-----------------------------------------------------------------------------------------
         FieldDesc **ppFieldDescList;        // FieldDesc pointer (or NULL if field not preserved) for each field
-
+// [#!Fields]
 
         //-----------------------------------------------------------------------------------------
         inline bmtMethAndFieldDescs() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
@@ -2366,8 +2369,8 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
     friend class DeclaredMethodIterator;
 
     // TypeDef->MethodList #
-    inline SLOT_INDEX NumDeclaredMethods() { LIMITED_METHOD_CONTRACT; return bmtMethod->GetDeclaredMethodCount(); }
-    inline DWORD NumDeclaredFields() { LIMITED_METHOD_CONTRACT; return bmtEnumFields->dwNumDeclaredFields; }
+    inline SLOT_INDEX NumDeclaredMethods() { LIMITED_METHOD_CONTRACT; return bmtMethod->GetDeclaredMethodCount(); }//All 当前class的MethodDef (except _VTblGap)
+    inline DWORD NumDeclaredFields() { LIMITED_METHOD_CONTRACT; return bmtEnumFields->dwNumDeclaredFields; }//#!Field !literal
 
     // --------------------------------------------------------------------------------------------
     // Used to report an error building this type.
