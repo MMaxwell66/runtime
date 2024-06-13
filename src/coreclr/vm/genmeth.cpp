@@ -1361,7 +1361,7 @@ void InstantiatedMethodDesc::SetupGenericMethodDefinition(IMDInternalImport* pIM
                                                           LoaderAllocator* pAllocator,
                                                           AllocMemTracker* pamTracker,
                                                           Module* pModule,
-                                                          mdMethodDef tok)
+                                                          mdMethodDef tok)//MethodDef
 {
     CONTRACTL
     {

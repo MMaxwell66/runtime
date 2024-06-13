@@ -177,7 +177,7 @@ MethodTableBuilder::CreateClass( Module *pModule,
 
 //*******************************************************************************
 //
-// Create a hash of all methods in this class.  The hash is from method name to MethodDesc.
+// Create a hash of all methods in this class.  The hash is from method name to MethodDesc (Decl).
 //
 MethodTableBuilder::MethodNameHash *
 MethodTableBuilder::CreateMethodChainHash(
@@ -215,7 +215,7 @@ MethodTableBuilder::CreateMethodChainHash(
 MethodTableBuilder::bmtRTMethod *
 MethodTableBuilder::LoaderFindMethodInParentClass(
     const MethodSignature & methodSig,
-    BOOL *                  pMethodConstraintsMatch)
+    BOOL *                  pMethodConstraintsMatch /* method generic的限制(obj,value type, interface etc)是否相同 */)
 {
     CONTRACTL
     {
@@ -242,7 +242,8 @@ MethodTableBuilder::LoaderFindMethodInParentClass(
         bmtParent->pParentMethodHash = CreateMethodChainHash(GetParentMethodTable());
     }
 
-    // We have a hash table, so use it
+    // We have a hash table, so use it // Q:这里是不是有可能出现多个slot有着相同的名字，这种情况下改返回哪个？
+    // A: 首先sig也要相同，第二见下面 if 0 的注释，我们选择更下面的实现，在这里依赖了这个hashtable后加入的会往前插
     pEntry = bmtParent->pParentMethodHash->Lookup(methodSig.GetName());
 
     // Traverse the chain of all methods with this name
@@ -284,7 +285,7 @@ MethodTableBuilder::LoaderFindMethodInParentClass(
 //@TODO: Move to this code, as the use of a HashTable is broken; overriding semantics
 //@TODO: require matching against the most-derived slot of a given name and signature,
 //@TODO: (which deals specifically with newslot methods with identical name and sig), but
-//@TODO: HashTables are by definition unordered and so we've only been getting by with the
+//@TODO: HashTables are by definition unordered and so we've only been getting by with the ; 'getting by' 勉强应付
 //@TODO: implementation being compatible with the order in which methods were added to
 //@TODO: the HashTable in CreateMethodChainHash.
 #if 0
@@ -1633,11 +1634,11 @@ MethodTableBuilder::BuildMethodTableThrowing(
     ImportParentMethods();
 
     // This will allocate the working versions of the VTable and NonVTable in bmtVT
-// 只是计算了 dwMaxVtableSize, 然后 allocate bmtVT->pSlotTable 的数组以供之后使用
+// 只是计算(估计)了 dwMaxVtableSize, 然后 allocate bmtVT->pSlotTable 的数组以供之后使用
     AllocateWorkingSlotTables();
 
     // Allocate a MethodDesc* for each method (needed later when doing interfaces), and a FieldDesc* for each field
-    // 好像只处理了field，但是为什么上面的comment说了MethodDesc，过期的comment吗？
+    // 只初始化了field cnt + FieldDescList，并没有处理method
     AllocateFieldDescs();
 
     // Copy the parent's vtable into the current type's vtable
@@ -1646,13 +1647,15 @@ MethodTableBuilder::BuildMethodTableThrowing(
     bmtVT->pDispatchMapBuilder = new (GetStackingAllocator()) DispatchMapBuilder(GetStackingAllocator());
 
     // Determine vtable placement for each member in this class
+    // 这里负责了默认的根据名字+signature进行重载
     PlaceVirtualMethods();
     PlaceNonVirtualMethods();
 
     // Allocate MethodDescs (expects methods placed methods)
+//负责创建MethodDescChunk和MethodDesc，以及初始化MethodDesc
     AllocAndInitMethodDescs();
 
-    if (IsInterface())
+    if (IsInterface())//TODO
     {
         //
         // We need to process/place method impls for default interface method overrides.
@@ -4859,7 +4862,7 @@ VOID MethodTableBuilder::TestOverRide(bmtMethodHandle hParentMethod,
 
     static const DWORD dwCount = mdPublic - mdPrivateScope + 1;
     static const WIDENING_STATUS rgWideningTable[dwCount][dwCount] =
-
+// 这个表的逻辑有点没能理解
     //               |        Base type
     // Subtype       |        mdPrivateScope  mdPrivate   mdFamANDAssem   mdAssem     mdFamily    mdFamORAssem    mdPublic
     // --------------+-------------------------------------------------------------------------------------------------------
@@ -5355,7 +5358,7 @@ MethodTableBuilder::PlaceNonVirtualMethods()
     while (it.Next())
     {
         // Skip methods that are placed already
-        if (it->GetSlotIndex() != INVALID_SLOT_INDEX)
+        if (it->GetSlotIndex() != INVALID_SLOT_INDEX) // (!virtual || static) && !(.cctor || .ctor())
             continue;
 
 #ifdef _DEBUG
@@ -5376,7 +5379,7 @@ MethodTableBuilder::PlaceNonVirtualMethods()
             fHasNonVtableSlots = TRUE;
             continue;
         }
-
+// Method有generic || loader传入的inst != 0 || class is interface
         // This will update slot index in bmtMDMethod
         if (!bmtVT->AddNonVirtualMethod(*it))
             BuildMethodTableThrowException(IDS_CLASSLOAD_TOO_MANY_METHODS);
@@ -5408,6 +5411,7 @@ MethodTableBuilder::PlaceNonVirtualMethods()
 
 //*******************************************************************************
 // Determine vtable placement for each virtual member in this class.
+// virtual instance methods
 VOID
 MethodTableBuilder::PlaceVirtualMethods()
 {
@@ -5466,7 +5470,7 @@ MethodTableBuilder::PlaceVirtualMethods()
 
         // Hash that a method with this name exists in this class
         // Note that ctors and static ctors are not added to the table
-        // 这个好像是用去比较generic里面的subst是否一致？
+        // Q:这个好像是用去比较generic里面的subst是否一致？A:和subst无关，是说method generic param的限制是否相同
         BOOL fMethodConstraintsMatch = FALSE;
 
         // If the member is marked with a new slot we do not need to find it in the parent
@@ -5495,7 +5499,7 @@ MethodTableBuilder::PlaceVirtualMethods()
                 }
 
                 if(!bmtProp->fNoSanityChecks)
-                {
+                {//一个是Flags里的Strict,而是检查MemberAccessMask是否匹配
                     TestOverRide(bmtMethodHandle(pParentMethod),
                                  bmtMethodHandle(*it));
 
@@ -5519,7 +5523,7 @@ MethodTableBuilder::PlaceVirtualMethods()
         }
         else if (pParentMethod != NULL)
         {
-            bmtVT->SetVirtualMethodOverride(pParentMethod->GetSlotIndex(), *it);
+            bmtVT->SetVirtualMethodOverride(pParentMethod->GetSlotIndex(), *it); // Override both decl & impl
         }
         else
         {
@@ -7077,7 +7081,7 @@ VOID MethodTableBuilder::AllocAndInitMethodDescs()
 //    sizeOfMethodDescs - total expected size of MethodDescs in this chunk
 //
 // Used by AllocAndInitMethodDescs.
-//
+// startIndex和count对不会计算box重复的
 VOID MethodTableBuilder::AllocAndInitMethodDescChunk(COUNT_T startIndex, COUNT_T count, SIZE_T sizeOfMethodDescs)
 {
     CONTRACTL {

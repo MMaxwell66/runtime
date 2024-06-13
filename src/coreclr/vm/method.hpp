@@ -5,12 +5,37 @@
 //
 /*
 MethodDesc
-1. normal class + .ctor => NativeCode(Seems for tired)
+1. normal class + .ctor => NativeCode(应该是为了tired)
 2. normal class + normal method => NativeCode + HasNonVtableSlot
-   对于这种最普通的method，看上去是说它不会再MT中有slot，而仅有MethodDesc。那有一个问题是MT中的slot和MD如何映射？是依赖于这种NonVtable的slot一定在最后吗？如果是的话，在build MD的时候哪行code调整了顺序?
+   对于这种最普通的method，看上去是说它不会在MT中有slot，而仅有MethodDesc。那有一个问题是MT中的slot和MD如何映射？是依赖于这种NonVtable的slot一定在最后吗？如果是的话，在build MD的时候哪行code调整了顺序?
 3. normal class + generic method <M0> => NativeCode + Instantiated
 
+
+MethodDesc的种类与如下有关：
+1. method type (MethodClassification)
+2. 如果是 !MethodImpl 会有额外的 class MethodImpl
+3. 如果不是vtable的slot 会有 MethodDesc::NonVtableSlot
+4. 如果有NativeCodeSlot (Tired compilation / rejit / non-static virtual non-abstract interface method(接口默认实现) / EnC)
+
+对于 value class !static, virtual, !generic, !special name
+    会边靠边额外创建一个MethodDesc
+
+
+关系
+PreCode
+  StubPrecode
+    NDirectImportPrecode
+
+MethodClassification
+- NDirectMethodDesc
+    has a field, ptr to a NDirectImportPrecode:
+      StubPrecodeCode, target init to NDirectImportPrecode, type is 0x05
+
+
+初始化：MethodTableBuilder::InitMethodDesc
+
 Q: MDC中的顺序是怎么样？看上去是根据token的顺序
+A: 没错是根据MethodDef中的token的顺序。另外box的MethodDesc是紧跟在同一个MethodDef之后的。而且两个一定是在同一个Chunk里的，不会被分隔开
 Q: 和上面2中的注释相关，MD的slot排序
 */
 
@@ -100,7 +125,7 @@ FORCEINLINE mdToken MergeToken(UINT16 tokrange, UINT16 tokremainder)
 // so that when a method is replaced its relevant flags are updated
 
 // Used in MethodDesc
-enum MethodClassification
+enum MethodClassification // 关于其的实际例子，见 MethodTableBuilder#bmtMDMethod的注释
 {
     mcIL        = 0, // IL
     mcFCall     = 1, // FCall (also includes tlbimped ctor, Delegate ctor)
@@ -1642,12 +1667,12 @@ protected:
     };
     UINT16      m_wFlags3AndTokenRemainder;
 
-    BYTE        m_chunkIndex;
+    BYTE        m_chunkIndex; // offset (mod 8) from 1st MethodDesc in this chunk
     BYTE        m_methodIndex; // Used to hold the index into the chunk of this MethodDesc. Currently all 8 bits are used, but we could likely work with only 7 bits
-
+                            // nth MethodDesc in this chunk
     // The slot number of this MethodDesc in the vtable array.
     WORD m_wSlotNumber;
-    WORD m_wFlags;
+    WORD m_wFlags; // lower bits: enum MethodDescClassification
 
 public:
 #ifdef DACCESS_COMPILE
@@ -2136,7 +2161,7 @@ public:
 +0x011 m_count          : UChar
 +0x012 m_flagsAndTokenRange : Uint2B
 */
-class MethodDescChunk
+class MethodDescChunk // from HFH
 {
     friend class MethodDesc;
     friend class CheckAsmOffsets;
@@ -2162,7 +2187,7 @@ public:
                                         MethodTable *initialMT,
                                         class AllocMemTracker *pamTracker);
 
-    TADDR GetTemporaryEntryPoints()
+    TADDR GetTemporaryEntryPoints() // 在AllocAndInitMethodDescChunk中应该还没有初始化
     {
         LIMITED_METHOD_CONTRACT;
         return *(dac_cast<DPTR(TADDR)>(this) - 1);
@@ -2355,7 +2380,7 @@ public:
     // Put the sig RVA in here - this allows us to avoid
     // touching the method desc table when CoreLib is prejitted.
 
-    TADDR           m_pSig;
+    TADDR           m_pSig;//!MethodDef's Signature
     DWORD           m_cSig;
 
 protected:
@@ -2723,7 +2748,7 @@ public:
     // The JIT generates an indirect call through this location in some cases.
     // Initialized to NDirectImportThunkGlue. Patched to the true target or
     // host interceptor stub or alignment thunk after linking.
-    LPVOID      m_pNDirectTarget;
+    LPVOID      m_pNDirectTarget; //指向NDirectMD所包括的NDirectImportPrecode的code
 };
 
 typedef DPTR(NDirectWriteableData)      PTR_NDirectWriteableData;
@@ -2732,6 +2757,7 @@ typedef DPTR(NDirectWriteableData)      PTR_NDirectWriteableData;
 // Operations specific to NDirect methods. We use a derived class to get
 // the compiler involved in enforcing proper method type usage.
 // DO NOT ADD FIELDS TO THIS CLASS.
+// 拥有一个Precode: m_pImportThunkGlue (type NDirectImportPrecode)
 //-----------------------------------------------------------------------
 class NDirectMethodDesc : public MethodDesc
 {
@@ -2748,10 +2774,10 @@ public:
         };
 
         // The writeable part of the methoddesc.
-        PTR_NDirectWriteableData    m_pWriteableData;
+        PTR_NDirectWriteableData    m_pWriteableData; //[HFH]
 
 #ifdef HAS_NDIRECT_IMPORT_PRECODE
-        PTR_NDirectImportThunkGlue  m_pImportThunkGlue;
+        PTR_NDirectImportThunkGlue  m_pImportThunkGlue; //NDirectImportPrecode
 #else // HAS_NDIRECT_IMPORT_PRECODE
         NDirectImportThunkGlue      m_ImportThunkGlue;
 #endif // HAS_NDIRECT_IMPORT_PRECODE
@@ -3393,7 +3419,7 @@ public: // <TODO>make private: JITinterface.cpp accesses through this </TODO>
     //
     // For generic method definitions that are not the typical method definition (e.g. C<int>.m<U>)
     // this field is null; to obtain the instantiation use LoadMethodInstantiation
-    PTR_Dictionary m_pPerInstInfo;  //SHARED
+    PTR_Dictionary m_pPerInstInfo;  //SHARED//[LFH], entries: [LFH] TypeVarTypeDesc, init@SetupGenericMethodDefinition
 
 private:
     enum
@@ -3405,8 +3431,8 @@ private:
         WrapperStubWithInstantiations   = 0x04,
     };
     WORD          m_wFlags2;
-    WORD          m_wNumGenericArgs;
 
+    WORD          m_wNumGenericArgs;//;#GenericParam of MethodDef
 public:
     static InstantiatedMethodDesc *FindOrCreateExactClassMethod(MethodTable *pExactMT,
                                                                 MethodDesc *pCanonicalMD);

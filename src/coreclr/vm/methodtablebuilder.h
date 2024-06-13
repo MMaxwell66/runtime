@@ -1068,6 +1068,8 @@ mcIL:
             IBinaryInteger`1.WriteBigEndian
     4. 非特殊情况
         e.g., Object.MemberwiseClone, Object..ctor, Object.Finalize, Object.ToString, Object.Equals
+
+不同的type会生成不同的MethodDesc
 */
         MethodClassification  m_type;               // Specific MethodDesc flavour根据MethodDef等信息计算出来的Method分类
         METHOD_IMPL_TYPE  m_implType;           // Whether or not the method is a methodImpl body
@@ -1409,6 +1411,10 @@ mcIL:
         SLOT_INDEX      m_maxSlotIdx; // parent: GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()
             // current: dwMaxVtableSize(v3) + All 当前class的MethodDef (except _VTblGap)
         bmtMethodSlot * m_rgSlots; // parent: [GetParentMethodTable()->GetCanonicalMethodTable()->GetNumMethods()] 根据MethodTable::GetMethodData(pParentMT)计算得出(ImportParentMethods)具体内容和使用需要再看看
+            // current: [0, GetParentMethodTable()->GetNumVirtuals()) 继承自parent,在ImportParentMethods中计算得到
+            //  current's !MethodDef, new slot / not override
+            //  .cctor & .ctor()
+            // -1: unboxed method
 
         template <typename INDEX_TYPE>
         void
@@ -1443,16 +1449,17 @@ mcIL:
         // Implemented using a bmtMethodSlotTable
         // new @ AllocateWorkingSlotTables
         // 1. #GetParentMethodTable()->GetNumVirtuals(), (CopyParentVtable)
-        //    根据name和sig会被这个class的MethodDef覆盖。
+        //    根据name和sig会被这个class的MethodDef覆盖。(对应于根据name和sig自动进行重载的情况)(PlaceVirtualMethods) (Both impl & decl)
         //    ++cVirtualSlots
         // 2. Virtual method defined in MethodDef, (PlaceVirtualMethods)
         //    AddVirtualMethod
         //    ++cVirtualSlots
         // <- cVirtualSlots
         // 3. AddNonVirtualMethod (PlaceNonVirtualMethods)
-        //    .cctor, .ctor
+        //    .cctor, .ctor， others(see PlaceNonVirtualMethods)
         // <- cVtableSlots
-        // 4. AddUnboxedMethod (AllocAndInitMethodDescs > AllocAndInitMethodDescChunk)
+        // 4. AddNonVirtualMethod for non-vtable slot (PlaceNonVirtualMethods)
+        // 5. AddUnboxedMethod (AllocAndInitMethodDescs > AllocAndInitMethodDescChunk)
         // <- cTotalSlots
         bmtMethodSlotTable * pSlotTable;
 
@@ -1468,10 +1475,22 @@ mcIL:
         DWORD dwMaxVtableSize;
 
         // Used to keep track of how many virtual and total slots are in the vtable
+        // 1. GetParentMethodTable()->GetNumVirtuals()
+        // 2. current's !MethodDef, new slot / not override
         SLOT_INDEX cVirtualSlots;
+// 1. GetParentMethodTable()->GetNumVirtuals()
+// 2. current's !MethodDef, new slot / not override
+// 3. +1 for .cctor if exist
+// 4. +1 for .ctor() if exist // 注意这些是属于vtable的一部分。
+// 5: Method有generic || loader传入的inst != 0 || class is interface (后两个是判断是否允许不在vtable中的slot (cVtableSlots)，如果不允许，所有剩余的MethodDef都在放在vtable中，否则可以放到vtable之后)
+//      如果loader的inst != 0, 那么box对应的也属于vtable（因为这个情况下所有的MethodDef都应在vtable中）
+// 6: All 当前class的MethodDef (except _VTblGap) 中所有剩余的
+// 个人理解，slots分为三部分 virtual, non-virtual vtable (.cctor, .ctor(), generic, interface etc), non-vtable.
         SLOT_INDEX cTotalSlots;
 
         // Number of slots allocated in Vtable
+// -2: .cctor, .ctor()
+// -1: Method有generic || loader传入的inst != 0 || class is interface
         SLOT_INDEX cVtableSlots;
         // DWORD dwNonVirtualSlots = cVtableSlots - cVirtualSlots;
 
@@ -1622,7 +1641,7 @@ mcIL:
             { WRAPPER_NO_CONTRACT; return (*pSlotTable)[idx]; }
 
         DWORD NumParentPointerSeries; //;parent MT GC desc #series
-        MethodNameHash *pParentMethodHash;  // method name -> bmtRTMethod
+        MethodNameHash *pParentMethodHash;  // (从pSlotTable的Decl中得到的)method name -> bmtRTMethod //这个Decl对于普通的虚函数看起来是bottommost,但对于普通的来说name至少是相同的(吗)，所以在这里的印象似乎没有。（之后要看看MethodImpl下面是什么个情况）
 
         inline bmtParentInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
     };  // struct bmtParentInfo
@@ -1960,6 +1979,7 @@ mcIL:
         SLOT_INDEX      m_cDeclaredMethods;     // inc in AddDeclaredMethod, not include _VtblGap //All 当前class的MethodDef (except _VTblGap)
         SLOT_INDEX      m_cMaxDeclaredMethods;  // count from Metadata Method Table ;#!MethodDef
         // 1. All 当前class的MethodDef (except _VTblGap)
+        // 按tok递增顺序
         bmtMDMethod **  m_rgDeclaredMethods;
 
         //-----------------------------------------------------------------------------------------

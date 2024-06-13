@@ -91,7 +91,7 @@ inline DWORD MethodTableBuilder::DeclaredMethodIterator::ImplFlags()
 }
 
 //***************************************************************************************
-inline LPCSTR MethodTableBuilder::DeclaredMethodIterator::Name()
+inline LPCSTR MethodTableBuilder::DeclaredMethodIterator::Name()//;MethodDef's Name
 {
     STANDARD_VM_CONTRACT;
     return GetMDMethod()->GetMethodSignature().GetName();

@@ -1104,7 +1104,7 @@ public:
     }
 
 
-    /*
+    /* [HFH] size: #!Field !literal
      * Pointer to a list of FieldDescs declared in this class
      * There are (m_wNumInstanceFields - GetParentClass()->m_wNumInstanceFields + m_wNumStaticFields) entries
      * in this array
@@ -1991,12 +1991,12 @@ public:
     DAC_ALIGNAS(EEClass) // Align the first member to the alignment of the base class
     PTR_Stub                         m_pStaticCallStub;
     PTR_Stub                         m_pInstRetBuffCallStub;
-    PTR_MethodDesc                   m_pInvokeMethod;
+    PTR_MethodDesc                   m_pInvokeMethod; //set in InitMethodDesc
     PTR_Stub                         m_pMultiCastInvokeStub;
     PTR_Stub                         m_pWrapperDelegateInvokeStub;
     UMThunkMarshInfo*                m_pUMThunkMarshInfo;
-    PTR_MethodDesc                   m_pBeginInvokeMethod;
-    PTR_MethodDesc                   m_pEndInvokeMethod;
+    PTR_MethodDesc                   m_pBeginInvokeMethod; //set in InitMethodDesc
+    PTR_MethodDesc                   m_pEndInvokeMethod; //set in InitMethodDesc
     Volatile<PCODE>                  m_pMarshalStub;
 
 #ifdef FEATURE_COMINTEROP

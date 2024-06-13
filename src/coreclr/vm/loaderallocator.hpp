@@ -594,7 +594,7 @@ public:
         return m_pPrecodeHeap;
     }
 
-    PTR_LoaderHeap GetNewStubPrecodeHeap()
+    PTR_LoaderHeap GetNewStubPrecodeHeap() // 16k interleaved(code + data), code => StubPrecodeCode(thunktemplates.asm)
     {
         LIMITED_METHOD_CONTRACT;
         return m_pNewStubPrecodeHeap;

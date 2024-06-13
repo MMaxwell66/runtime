@@ -316,7 +316,7 @@ protected:
 // The type variables are tied back to the class or method that *defines* them.
 // This is done through typedef or methoddef tokens.
 // 有一种情况就是用来表示 Type parameter的
-
+// 1. Method Generic methodTok, idx, gpTok(methodTok's idx th)
 class TypeVarTypeDesc : public TypeDesc
 {
 public:

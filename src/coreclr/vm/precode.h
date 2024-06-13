@@ -83,7 +83,7 @@ struct StubPrecodeData
 typedef DPTR(StubPrecodeData) PTR_StubPrecodeData;
 
 #if !(defined(TARGET_ARM64) && defined(TARGET_UNIX))
-extern "C" void StubPrecodeCode();
+extern "C" void StubPrecodeCode(); // in thunktemplates.asm
 extern "C" void StubPrecodeCode_End();
 #endif
 
