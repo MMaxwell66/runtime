@@ -211,7 +211,7 @@ BOOL DispatchMapBuilder::Contains(DispatchMapTypeID typeID, UINT32 slotNumber)
 void
 DispatchMapBuilder::InsertMDMapping(
     DispatchMapTypeID typeID,
-    UINT32            slotNumber,
+    UINT32            slotNumber,//of the interface
     MethodDesc *      pMDTarget,
     BOOL              fIsMethodImpl)
 {

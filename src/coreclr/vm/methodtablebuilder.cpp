@@ -1678,11 +1678,12 @@ MethodTableBuilder::BuildMethodTableThrowing(
         // interfaces as they are placed.
         //
         ComputeInterfaceMapEquivalenceSet();
-
+//这个干的事情是对于每个bmtInterface->pInterfaceMap中的每个method去找到实现的slot index并记录下来。注意pInterfaceMap中是有可能有重复的（等价的），但不会去重而是都会计算slot index
         PlaceInterfaceMethods();
-
+//处理MethodImpl，把MethodImpl+decl tok+decl method的对记录到bmtMethodImplInfo.rgEntries
         ProcessMethodImpls();
-        ProcessInexactMethodImpls();
+        ProcessInexactMethodImpls(); // skipped
+//1. MethodDesc尾部的MethodImpl部分的初始化 2. 注册MethodImpl的Dispatch mapping信息
         PlaceMethodImpls();
 
         if (!bmtProp->fNoSanityChecks)
@@ -7311,7 +7312,7 @@ MethodTableBuilder::AllocAndInitDictionary()
 }
 
 //*******************************************************************************
-//
+// 根据实例化去计算 bmtInterfaceInfo 中相同的项，见 bmtInterfaceInfo comment
 // Used by BuildMethodTable
 //
 // Compute the set of interfaces which are equivalent. Duplicates in the interface map
@@ -7604,7 +7605,7 @@ MethodTableBuilder::PlaceInterfaceMethods()
         // There are three reasons why an interface could be in the implementation list
         // 1. Inherited from parent
         // 2. Explicitly declared in the implements list
-        // 3. Implicitly declared through the implements list of an explicitly declared interface   # 这个case 3是不是不太好实现的样子，因为compiler会把所有这种继承出来的interface populate成explicit的样子
+        // 3. Implicitly declared through the implements list of an explicitly declared interface   # 这个case 3是不是不太好实验的样子，因为compiler会把所有这种继承出来的interface populate成explicit的样子
         //
         // The reason these cases need to be distinguished is that an inherited interface that is
         // also explicitly redeclared in the implements list must be fully reimplemented using the
@@ -7717,7 +7718,7 @@ MethodTableBuilder::PlaceInterfaceMethods()
                     // We rely on the fact that interface map of parent type is subset of this type (incl.
                     // duplicates), see code:#InterfaceMap_SupersetOfParent
                     // NOTE: This override does not cache the resulting MethodData object
-                    hParentData = MethodTable::GetMethodData(
+                    hParentData = MethodTable::GetMethodData( //TODO(JJ):没细看
                             rgInterfaceDispatchMapTypeIDs,
                             cInterfaceDuplicates,
                             pCurItfMT,
@@ -7753,7 +7754,7 @@ MethodTableBuilder::PlaceInterfaceMethods()
         // For each method declared in this interface
         bmtInterfaceEntry::InterfaceSlotIterator itfSlotIt =
             pCurItfEntry->IterateInterfaceSlots(GetStackingAllocator());
-        for (; !itfSlotIt.AtEnd(); ++itfSlotIt)
+        for (; !itfSlotIt.AtEnd(); ++itfSlotIt) // virtual methods desc
         {
             if (fParentInterfaceEquivalent)
             {

@@ -17,11 +17,11 @@ class MethodDesc;
 
 // <TODO>@TODO: This is very bloated. We need to trim this down alot. However,
 // we need to keep it on a 8 byte boundary.</TODO>
-class MethodImpl
-{
-
+class MethodImpl//记录了所有以这个MethodDesc为MethodImpl的body的decl的信息
+{// sorted in DWORD. 1. MethodImpl's decl MethodDesc->GetSlot() 2. MethodImpl's decl tok 3. MethodImpl's decl bmtMethodHandle
+// <size>DWORD [size] mdToken[size] (pImplementedMD)MethodDesc*[size]
     PTR_DWORD            pdwSlots;       // Maintains the slots and tokens in sorted order, the first entry is the size
-    DPTR( PTR_MethodDesc ) pImplementedMD;
+    DPTR( PTR_MethodDesc ) pImplementedMD; //^^^
 
 public:
 

@@ -1183,7 +1183,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= VMFLAG_VTABLEMETHODIMPL;
     }
-
+//1.继承parent
     inline BOOL HasVTableMethodImpl()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1195,7 +1195,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= VMFLAG_COVARIANTOVERRIDE;
     }
-
+// 自身/parent是否存在协变返回值函数MethodImpl
     inline BOOL HasCovariantOverride()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1432,7 +1432,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= (DWORD)VMFLAG_NOT_TIGHTLY_PACKED;
     }
-    DWORD ContainsMethodImpls()
+    DWORD ContainsMethodImpls() //存在MethodImpl
     {
         LIMITED_METHOD_CONTRACT;
         return (m_VMFlags & VMFLAG_CONTAINS_METHODIMPLS);

@@ -1077,7 +1077,7 @@ mcIL:
 
         MethodDesc *      m_pMD;                // MethodDesc created and assigned to this method
         MethodDesc *      m_pUnboxedMD;         // Unboxing MethodDesc if this is a virtual method on a valuetype
-        SLOT_INDEX        m_slotIndex;          // Vtable slot number this method is assigned to
+        SLOT_INDEX        m_slotIndex;          // Vtable slot number this method is assigned to//正常是按先virtual后non顺序，除非是override，那会是被override的slot index
         SLOT_INDEX        m_unboxedSlotIndex;
     };  // class bmtMDMethod
 
@@ -1317,7 +1317,7 @@ mcIL:
 
     private:
         bmtMethodHandle     m_decl;
-        bmtMethodHandle     m_impl;
+        bmtMethodHandle     m_impl; // 这里m_impl和m_decl不同对应的是MethodImpl,而不是说override那种
     };  // class bmtMethodSlot
 
     // --------------------------------------------------------------------------------------------
@@ -1747,7 +1747,7 @@ mcIL:
 
     private:
         bmtMethodHandle     m_decl;
-        SLOT_INDEX          m_implSlotIndex;
+        SLOT_INDEX          m_implSlotIndex; //对应method的slot index
     };  // class bmtInterfaceSlotImpl
 
     // --------------------------------------------------------------------------------------------
@@ -1900,9 +1900,9 @@ mcIL:
         // 1. interface GetNumVirtuals() = m_cImplTable
         // 2. VirtualStatic = m_cImplTableStatics
         // 猜测是这个interface要求的实现
-        bmtInterfaceSlotImpl *    m_pImplTable;
-        SLOT_INDEX                m_cImplTable;
-        SLOT_INDEX                m_cImplTableStatics;
+        bmtInterfaceSlotImpl *    m_pImplTable; // [m_cImplTable][m_cImplTableStatics]
+        SLOT_INDEX                m_cImplTable; // #virtual
+        SLOT_INDEX                m_cImplTableStatics; // #virtual static
         InterfaceDeclarationScope m_declScope;
         UINT32                    m_equivalenceSet;
         bool                      m_fEquivalenceSetWithMultipleEntries;
@@ -1915,6 +1915,10 @@ mcIL:
 // 从topmost parent开始的InterfaceImpl计算，包括transitive。
 // 每一个层级和其parent的结构相同。也就是说每个祖先的interface map都是pInterfaceMap的前缀
 // 但因此存在可能的重复项（因为某个子类的generic实例化导致出现重复，详见ExpandApproxInheritedInterfaces）
+// class A<U> : I<U>
+// class B<U, V> : A<U>, I<V>
+// class C : B<int, int>
+// 此时，C的pInterfaceMap里面任然会存在两个I`1，因为对于B来说两者是不同的。在 ComputeInterfaceMapEquivalenceSet 中，会根据最终的实例化去计算有哪些项是相同的，并标记等价类。
         bmtInterfaceEntry * pInterfaceMap;
         DWORD dwInterfaceMapSize;               // count of entries in interface map, # of interface, ~~去除了那些相继承链上相同的interface~~ 见上行
         DWORD dwInterfaceMapAllocated;          // upper bound on size of interface map
@@ -2202,7 +2206,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
         //-----------------------------------------------------------------------------------------
         // The allocated array of entries and the count indicating how many entries are in use.
     private:
-        Entry *rgEntries;
+        Entry *rgEntries; //array, entry: MethodDef(MethodImpl's body) + decl tok + 对应的decl method (注意，多个MethodImpl可以拥有同一个body)
         DWORD        cMaxIndex;
 
         //-----------------------------------------------------------------------------------------
@@ -2249,7 +2253,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
         //-----------------------------------------------------------------------------------------
         // Get the impl method for a particular methodimpl entry.
         bmtMDMethod *
-        GetImplementationMethod(
+        GetImplementationMethod( // body of MethodImpl
             DWORD i)
             { LIMITED_METHOD_CONTRACT; _ASSERTE(i < pIndex); return rgEntries[i].pImplMethod; }
 
