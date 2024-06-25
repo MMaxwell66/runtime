@@ -1952,12 +1952,12 @@ mcIL:
         // get lumped in with "regular statics".
         DWORD dwNumStaticFields; //;# !Field static && !literal, (incl. dwNumThreadStaticFields)
         DWORD dwNumStaticObjRefFields;
-        DWORD dwNumStaticBoxedFields;
+        DWORD dwNumStaticBoxedFields; // static value type
 
         // We keep a separate count for just thread statics
         DWORD dwNumThreadStaticFields;      // !Field static && !literal + System.ThreadStaticAttribute
         DWORD dwNumThreadStaticObjRefFields;
-        DWORD dwNumThreadStaticBoxedFields;
+        DWORD dwNumThreadStaticBoxedFields; // static thread static value type
 
         // dwNumStaticFields + dwNumInstanceFields
         DWORD dwNumDeclaredFields;           // For calculating amount of FieldDesc's to allocate //; dwNumStaticFields + dwNumInstanceFields = #!Field !literal
@@ -2095,7 +2095,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
     {
         //-----------------------------------------------------------------------------------------
         FieldDesc **ppFieldDescList;        // FieldDesc pointer (or NULL if field not preserved) for each field
-// [#!Fields]
+// [#!Fields] 这里主要是MetaData里面的顺序可能是static instance混在一起的，而FieldDesc是先instance再static，所以要有一个map
 
         //-----------------------------------------------------------------------------------------
         inline bmtMethAndFieldDescs() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
@@ -2106,15 +2106,15 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
     struct bmtFieldPlacement
     {
         // For compacting field placement
-        DWORD InstanceFieldStart[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];
+        DWORD InstanceFieldStart[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1]; // 包括parent size, 对于ptr size，会跳过GC ptr占据的空间，其空间由GCPointerFieldStart指明
 
         DWORD NumInstanceFieldsOfSize[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];
-        DWORD FirstInstanceFieldOfSize[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];
-        DWORD GCPointerFieldStart;
-        DWORD NumInstanceGCPointerFields;   // does not include inherited pointer fields
-        DWORD NumGCPointerSeries;
-        DWORD NumInstanceFieldBytes;
-        DWORD NumInlineArrayElements;
+        DWORD FirstInstanceFieldOfSize[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1]; // index in instance field
+        DWORD GCPointerFieldStart; // GC ptr field offset start, 包括parent
+        DWORD NumInstanceGCPointerFields;   // does not include inherited pointer fields // instance field, object ref
+        DWORD NumGCPointerSeries; // 1. if all ptr => 1; 2. if contains ptr, parent #series + 1, 3. if contains value type with ptr, + #series of value type
+        DWORD NumInstanceFieldBytes; // size of instance field, 包括parent
+        DWORD NumInlineArrayElements; //System.Runtime.CompilerServices.InlineArray
 
         bool  fIsAllGCPointers;
         bool  fIsByRefLikeType; // IsByRefLikeAttribute
@@ -2122,7 +2122,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
         bool  fHasSelfReferencingStaticValueTypeField_WithRVA;
 
         // These data members are specific to regular statics
-        DWORD RegularStaticFieldStart[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];            // Byte offset where to start placing fields of this size
+        DWORD RegularStaticFieldStart[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];            // Byte offset where to start placing fields of this size//就是基础的larger size放在前面计算出来的，但是boxed, ptr不被计算在内
         DWORD NumRegularStaticFieldsOfSize[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];       // # Fields of this size
         DWORD NumRegularStaticGCPointerFields;   // does not include inherited pointer fields
         DWORD NumRegularStaticGCBoxedFields;   // does not include inherited pointer fields
@@ -2131,7 +2131,7 @@ subst: {Generic, class#I`1, 1GP}(stripped), [int]
         DWORD ThreadStaticFieldStart[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];            // Byte offset where to start placing fields of this size
         DWORD NumThreadStaticFieldsOfSize[MAX_LOG2_PRIMITIVE_FIELD_SIZE+1];       // # Fields of this size
         DWORD NumThreadStaticGCPointerFields;   // does not include inherited pointer fields
-        DWORD NumThreadStaticGCBoxedFields;   // does not include inherited pointer fields
+        DWORD NumThreadStaticGCBoxedFields;   // does not include inherited pointer fields // static vaule type field
 
         inline bmtFieldPlacement() { LIMITED_METHOD_CONTRACT; memset((void *)this, 0, sizeof(*this)); }
     };  // struct bmtFieldPlacement

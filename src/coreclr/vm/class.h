@@ -926,7 +926,7 @@ public:
         SetPackableField(EEClass_Field_NumInstanceFields, wNumInstanceFields);
     }
 
-    /*
+    /* # !Field static && !literal, 包括thread static
      * Number of static fields declared in this class.
      * Implementation Note: Static values are laid out at the end of the MethodTable vtable.
      */
@@ -941,7 +941,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         SetPackableField(EEClass_Field_NumStaticFields, wNumStaticFields);
     }
-
+// !Field static && !literal + System.ThreadStaticAttribute
     inline WORD GetNumThreadStaticFields()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1023,9 +1023,9 @@ public:
     }
 #endif // FEATURE_TYPEEQUIVALENCE
 
-    /*
+    /* // static ptr & boxed
      * Number of static handles allocated
-     */
+     */ // 为什么不存 ptr + boxed, 而是存 sum + boxed? 这个packable field不是依赖于值小bit少嘛？存两个小的更好压缩才对
     inline WORD GetNumHandleRegularStatics ()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1037,7 +1037,7 @@ public:
         SetPackableField(EEClass_Field_NumHandleStatics, wNumHandleRegularStatics);
     }
 
-    /*
+    /* // thread static ptr & boxed
      * Number of static handles allocated for ThreadStatics
      */
     inline WORD GetNumHandleThreadStatics ()
@@ -1051,7 +1051,7 @@ public:
         SetPackableField(EEClass_Field_NumHandleThreadStatics, wNumHandleThreadStatics);
     }
 
-    /*
+    /* // static boxed, part of GetNumHandleRegularStatics
      * Number of boxed statics allocated
      */
     inline WORD GetNumBoxedRegularStatics ()
@@ -1065,7 +1065,7 @@ public:
         SetPackableField(EEClass_Field_NumBoxedStatics, wNumBoxedRegularStatics);
     }
 
-    /*
+    /* // thread static boxed
      * Number of boxed statics allocated for ThreadStatics
      */
     inline WORD GetNumBoxedThreadStatics ()
@@ -1337,7 +1337,7 @@ public:
         m_VMFlags |= VMFLAG_ENC_STATIC_FIELDS;
     }
 #endif // EnC_SUPPORTED
-
+// System.Runtime.CompilerServices.FixedAddressValueTypeAttribute
     BOOL HasFixedAddressVTStatics()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1402,7 +1402,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= (DWORD)VMFLAG_HAS_FIELDS_WHICH_MUST_BE_INITED;
     }
-    DWORD IsInlineArray()
+    DWORD IsInlineArray() // System.Runtime.CompilerServices.InlineArray
     {
         LIMITED_METHOD_CONTRACT;
         return (m_VMFlags & VMFLAG_INLINE_ARRAY);
@@ -1412,7 +1412,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         m_VMFlags |= (DWORD)VMFLAG_INLINE_ARRAY;
     }
-    DWORD HasNonPublicFields()
+    DWORD HasNonPublicFields() // Any !Filed not public
     {
         LIMITED_METHOD_CONTRACT;
         return (m_VMFlags & VMFLAG_HASNONPUBLICFIELDS);

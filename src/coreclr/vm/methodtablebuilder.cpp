@@ -1739,7 +1739,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
     // which is NULL if not a by value field, and points to the EEClass of the field if a by value field.  Instance fields
     // come first, statics come second.
     MethodTable ** pByValueClassCache = NULL;
-
+//1. 填充EEClass.m_pFieldDescList
     // Go thru all fields and initialize their FieldDescs.
     InitializeFieldDescs(GetApproxFieldDescListRaw(), pLayoutRawFieldInfos, bmtInternal, bmtGenerics,
         bmtMetaData, bmtEnumFields, bmtError,
@@ -1782,7 +1782,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
         }
     }
 
-    // Place regular static fields
+    // Place regular static fields // 设置FieldDesc中的offset
     PlaceRegularStaticFields();
 
     // Place thread static fields
@@ -1832,7 +1832,7 @@ MethodTableBuilder::BuildMethodTableThrowing(
             HandleExplicitLayout(pByValueClassCache);
         }
         else
-        {
+        { // 1. set FieldDesc offset 2. parent末尾因为align而浪费的空间也会被考虑 3. value type放在最后 4. #GC series: 见bmtFP->NumGCPointerSeries
             // Place instance fields
             PlaceInstanceFields(pByValueClassCache);
         }
@@ -7903,7 +7903,7 @@ VOID MethodTableBuilder::PlaceRegularStaticFields()
         bmtFP->NumRegularStaticGCBoxedFields + bmtFP->NumRegularStaticGCPointerFields;
 
     // Place fields, largest first, padding so that each group is aligned to its natural size
-    for (i = MAX_LOG2_PRIMITIVE_FIELD_SIZE; (signed int) i >= 0; i--)
+    for (i = MAX_LOG2_PRIMITIVE_FIELD_SIZE; (signed int) i >= 0; i--) // 这里的逻辑就是正常的c++优化的逻辑
     {
         // Fields of this size start at the next available location
         bmtFP->RegularStaticFieldStart[i] = dwCumulativeStaticFieldPos;
@@ -8204,7 +8204,7 @@ VOID    MethodTableBuilder::PlaceInstanceFields(MethodTable ** pByValueClassCach
             dwCumulativeInstanceFieldPos = (DWORD)ALIGN_UP(dwCumulativeInstanceFieldPos, dwAlignment);
         }
 #endif // FEATURE_READYTORUN
-
+//!!这里是一个第一眼不会想到的点，parent剩余的bytes可以给小size的field用。Q: parent of paretn?
         // place small fields first if the parent have a number of field bytes that is not aligned
         if (!IS_ALIGNED(dwCumulativeInstanceFieldPos, DATA_ALIGNMENT))
         {
@@ -8257,20 +8257,20 @@ VOID    MethodTableBuilder::PlaceInstanceFields(MethodTable ** pByValueClassCach
                             break;
                     }
 
-                    // out of luck - can't reorder gc fields
+                    // out of luck - can't reorder gc fields // 能不能再考虑下更小size的field?
                     if (j >= bmtEnumFields->dwNumInstanceFields)
                         break;
                 }
 
                 // Place the field
-                dwCumulativeInstanceFieldPos = (DWORD)ALIGN_UP(dwCumulativeInstanceFieldPos, size_t{ 1 } << i);
+                dwCumulativeInstanceFieldPos = (DWORD)ALIGN_UP(dwCumulativeInstanceFieldPos, size_t{ 1 } << i); //根据上面的IS_ALIGNED是不是一定aigned的?
 
                 pFieldDescList[j].SetOffset(dwCumulativeInstanceFieldPos - dwOffsetBias);
                 dwCumulativeInstanceFieldPos += (1 << i);
 
                 // We've placed this field now, so there is now one less of this size field to place
                 if (--bmtFP->NumInstanceFieldsOfSize[i] == 0)
-                    continue;
+                    continue; // 这里会考虑更大的field,但不考虑一下更小的field?
 
                 // We are done in this round if we haven't picked the first field
                 if (bmtFP->FirstInstanceFieldOfSize[i] != j)

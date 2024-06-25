@@ -863,7 +863,7 @@ DomainAssembly* Module::GetDomainAssembly()
 
 #ifndef DACCESS_COMPILE
 #include "staticallocationhelpers.inl"
-
+// 在 https://github.com/dotnet/runtime/pull/99183 中被重构
 // Parses metadata and initializes offsets of per-class static blocks.
 void Module::BuildStaticsOffsets(AllocMemTracker *pamTracker)
 {

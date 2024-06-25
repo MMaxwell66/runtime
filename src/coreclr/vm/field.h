@@ -45,13 +45,13 @@ class FieldDesc
         unsigned m_dword1;
         struct {
 #endif
-        unsigned m_mb               : 24;
+        unsigned m_mb               : 24; // Field tok rid
 
         // 8 bits...
         unsigned m_isStatic         : 1;
         unsigned m_isThreadLocal    : 1;
         unsigned m_isRVA            : 1;
-        unsigned m_prot             : 3;
+        unsigned m_prot             : 3; // Field's Flags FieldAccess
 #if defined(DACCESS_COMPILE)
         };
     };
@@ -64,8 +64,8 @@ class FieldDesc
 #endif
         // Note: this has been as low as 22 bits in the past & seemed to be OK.
         // we can steal some more bits here if we need them.
-        unsigned m_dwOffset         : 27;
-        unsigned m_type             : 5;
+        unsigned m_dwOffset         : 27; // 在.NET9之前，static是module中所有type一起分配的，对于static，这个offset是module statics内存中的offset。在.NET9之后，static由每个type负责，不再由module统一处理
+        unsigned m_type             : 5; // for by-ref, is valuetype
 #if defined(DACCESS_COMPILE)
         };
     };
