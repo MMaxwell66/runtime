@@ -14,7 +14,7 @@ MethodDesc
 MethodDesc的种类与如下有关：
 1. method type (MethodClassification)
 2. 如果是 !MethodImpl 会有额外的 class MethodImpl
-3. 如果不是vtable的slot 会有 MethodDesc::NonVtableSlot
+3. 如果不是vtable的slot 会有 MethodDesc::NonVtableSlot (用来保存该method的code ptr，比如初始化的时候是对应的PreCode的code part)
 4. 如果有NativeCodeSlot (Tired compilation / rejit / non-static virtual non-abstract interface method(接口默认实现) / EnC)
 
 对于 value class !static, virtual, !generic, !special name
@@ -266,7 +266,7 @@ public:
 
         return (m_wFlags3AndTokenRemainder & enum_flag3_HasStableEntryPoint) != 0;
     }
-
+    // nonslot/MT->slot 所保存的func_ptr
     inline PCODE GetStableEntryPoint()
     {
         LIMITED_METHOD_DAC_CONTRACT;
@@ -278,7 +278,7 @@ public:
 
     void SetMethodEntryPoint(PCODE addr);
     BOOL SetStableEntryPointInterlocked(PCODE addr);
-
+    // MethodDesc -> PreCode -> func_ptr
     PCODE GetTemporaryEntryPoint();
 
     void SetTemporaryEntryPoint(LoaderAllocator *pLoaderAllocator, AllocMemTracker *pamTracker);

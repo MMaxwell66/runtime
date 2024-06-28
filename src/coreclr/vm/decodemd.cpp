@@ -363,7 +363,7 @@ void Encoder::ContainsNegatives(BOOL b)
 
     signedNumbers = b;
 }
-void Encoder::EncodeSigned(signed value)
+void Encoder::EncodeSigned(signed value) // not support signed::min
 {
     STATIC_CONTRACT_NOTHROW;
     STATIC_CONTRACT_GC_NOTRIGGER;
@@ -376,7 +376,7 @@ void Encoder::EncodeSigned(signed value)
         Encode(value);
         return;
     }
-    unsigned v = (value <= 0 ) ? (-value)<<1 : (value<<1)-1;
+    unsigned v = (value <= 0 ) ? (-value)<<1 : (value<<1)-1; /* 0->0, signed::min -> 0 */
     Encode(v);
 }
 

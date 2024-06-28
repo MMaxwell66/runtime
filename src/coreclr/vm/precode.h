@@ -210,7 +210,7 @@ struct FixupPrecodeData
 {
     PCODE Target;
     MethodDesc *MethodDesc;
-    PCODE PrecodeFixupThunk;
+    PCODE PrecodeFixupThunk; // init to ThePreStub(ThePreStubAMD64.asm)
 };
 
 typedef DPTR(FixupPrecodeData) PTR_FixupPrecodeData;

@@ -1029,7 +1029,7 @@ public:
     // A MethodTable can represeent a type such as "String" or an
     // instantiated type such as "List<String>".
     //
-
+// !TypeDef's flag tdInterface
     inline BOOL IsInterface()
     {
         LIMITED_METHOD_DAC_CONTRACT;
@@ -1410,8 +1410,8 @@ public:
 
     void VerifyThatAllVirtualStaticMethodsAreImplemented();
 
-    inline WORD GetNumVirtuals()
-    {
+    inline WORD GetNumVirtuals() // 1. GetParentMethodTable()->GetNumVirtuals()
+    { // 2. current's !MethodDef, new slot / not override
         LIMITED_METHOD_DAC_CONTRACT;
 
         return m_wNumVirtuals;
@@ -1506,7 +1506,7 @@ public:
     inline BOOL IsInt128OrHasInt128Fields();
 
     UINT32 GetNativeSize();
-
+// 包括末尾的padding，对于value type需要是boxed下的大小
     DWORD           GetBaseSize()
     {
         LIMITED_METHOD_DAC_CONTRACT;
@@ -1662,7 +1662,7 @@ public:
     PTR_FieldDesc GetFieldDescByIndex(DWORD fieldIndex);
 
     DWORD GetIndexForFieldDesc(FieldDesc *pField);
-
+// 继承， TypeDef's Flags: !tdBeforeFieldInit 好像是说要求cctor必须再实际访问static or instance的时候执行，而before field init放宽了要求，可以更早一点。估计是前者可能需要一些static sync来保证，而后者可以用jit了保证，不影响生成的代码？
     inline bool HasPreciseInitCctors()
     {
         LIMITED_METHOD_CONTRACT;
@@ -2148,7 +2148,7 @@ public:
         WRAPPER_NO_CONTRACT;
         return GetDispatchMap() != NULL;
     }
-
+// dispatch map是一个特殊encode的bitstream,记录了interface+slot对应的vtable slot number, Q:这个意味着读取dispatch map都要从头读到尾，是不是说这个结构使用不频繁？
     PTR_DispatchMap GetDispatchMap();
 
     inline BOOL HasDispatchMapSlot()
@@ -3641,7 +3641,7 @@ private:
     //   to add new ones, the access is faster.
     // - Optional members can accommodate structures of any size. It is trivial to add new ones,
     //   the access is slower.
-
+// 这个其实就是我MethodTable结构里面记录那些 if xxx : yyy 那些，只不过它没有像multi purpose那样提供一个offset表或者是total size或者是统一的flags来表示哪些slot是有的，所以code上没有那么明显。
     // The following macro will automatically create GetXXX accessors for the optional members.
 #define METHODTABLE_OPTIONAL_MEMBERS() \
     /*                          NAME                    TYPE                            GETTER                     */ \

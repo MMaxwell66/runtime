@@ -2886,7 +2886,7 @@ PCODE MethodDescChunk::GetTemporaryEntryPoint(int index)
 
     return Precode::GetPrecodeForTemporaryEntryPoint(GetTemporaryEntryPoints(), index)->GetEntryPoint();
 }
-
+//指向Chunk头的PreCode[]中的PreCode的code part
 PCODE MethodDesc::GetTemporaryEntryPoint()
 {
     CONTRACTL
@@ -2949,7 +2949,7 @@ void MethodDescChunk::CreateTemporaryEntryPoints(LoaderAllocator *pLoaderAllocat
 
     _ASSERTE(GetTemporaryEntryPoints() != NULL);
 }
-
+// 更新mt/nonslot函数指针，并设置flag: enum_flag3_HasStableEntryPoint | enum_flag3_HasPrecode
 //*******************************************************************************
 Precode* MethodDesc::GetOrCreatePrecode()
 {
@@ -2973,7 +2973,7 @@ Precode* MethodDesc::GetOrCreatePrecode()
     }
 
     // Allocate the precode if necessary
-    if (requiredType != availableType)
+    if (requiredType != availableType) // 也就是说对于大部分情况，其实已经有了需要的precode，但是并没有set flag
     {
         // code:Precode::AllocateTemporaryEntryPoints should always create precode of the right type for dynamic methods.
         // If we took this path for dynamic methods, the precode may leak since we may allocate it in domain-neutral loader heap.

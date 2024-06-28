@@ -287,7 +287,7 @@ DispatchMap::DispatchMap(
 
 //----------------------------------------------------------------------------
 // This mapping consists of a list of the following entries.
-// <type, [<slot, (index | slot)>]>. This is implemented as
+// <type, [<slot, (index | slot)>]>. This is implemented as     // 这里的(index | slot)应该是说对于interface这些，是slot，对于this是method index.然后查找是 (intf, slot)->(this,slot)->index
 //
 // flag:  0 if the map is a part of a JIT'd module
 //        1 if the map is a part of an NGEN'd module.
@@ -295,7 +295,7 @@ DispatchMap::DispatchMap(
 // {
 //   type:  The ID current type being mapped
 //   count: Number of subentries for the current type
-//   bool:  Whether or not the target slot/index values can be negative.
+//   bool:  Whether or not the target slot/index _delta_ values can be negative.
 //   {
 //     slot:       The slot of type that is being mapped
 //     index/slot: This is a slot mapping for the current type. The implementation search is
@@ -354,7 +354,7 @@ DispatchMap::CreateEncodedMapping(
     // Now that we have stats about the overall absolute maximum map size, we can allocate
     // some working space for createing the encoded map in.
     // Sizes: flag==UINT32, typeID==UINT32, slot==UINT32, index/slot==UINT32
-
+//理论上，根据后面的encode逻辑，一个32bits的cnt是有可能encode成37bits的，而且它也没有计算subcnt,所以有可能会溢出，而且encoder内没有检查boundary，存在overflow的可能性。但是考虑到像subcnt sum to cnt, slot是16bits，以及使用了delta压缩，基本上不太可能出现溢出。不过考虑到溢出的危害性，这里还是比较危险的。最好是有一个完整的证明。
     S_UINT32 scbMap = S_UINT32(sizeof(UINT32)) +
                    S_UINT32(cNumTypes) * S_UINT32(sizeof(UINT32)) +
                    S_UINT32(cNumEntries) * S_UINT32((sizeof(UINT32) + sizeof(UINT32)));
@@ -368,7 +368,7 @@ DispatchMap::CreateEncodedMapping(
         // Create the encoder over the newly allocated memory
         Encoder e(pbMap);
         // Encode the count of type entries
-        e.Encode((unsigned)cNumTypes);
+        e.Encode((unsigned)cNumTypes); // max:37bits
         // Start encoding the map
         DispatchMapBuilder::Iterator it(pMapBuilder);
         it.SkipThisTypeEntries();
@@ -420,7 +420,7 @@ DispatchMap::CreateEncodedMapping(
                                   it.GetTargetMD()->IsVirtual());
                 // Encode the slot
                 prevSlot = curSlot;
-                curSlot = it.GetSlotNumber();
+                curSlot = it.GetSlotNumber(); //fyi,not target slot number
                 INT32 deltaSlot = curSlot - prevSlot - ENCODING_SLOT_DELTA;
                 CONSISTENCY_CHECK(0 <= deltaSlot);
                 e.Encode((unsigned)deltaSlot);

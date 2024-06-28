@@ -443,7 +443,7 @@ inline INT32 MethodTable::MethodIterator::GetNumMethods() const
     CONSISTENCY_CHECK( m_pMethodData->GetNumMethods() == static_cast< UINT32 >( m_iMethods ) );
     return m_iMethods;
 }
-
+//;; 1. any implemented interface has enum_flag_HasVirtualStaticMethods 2. any !MethodDef's flag is virtual|static
 //==========================================================================================
 inline BOOL MethodTable::HasVirtualStaticMethods() const
 {

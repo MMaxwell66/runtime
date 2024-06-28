@@ -671,7 +671,7 @@ struct DispatchMapBuilderNode
 };  // struct DispatchMapBuilderNode
 
 // ===========================================================================
-class DispatchMapBuilder
+class DispatchMapBuilder // sort by type id then slot number
 {
 public:
     class Iterator;
@@ -857,7 +857,7 @@ public:
     static UINT32 GetObjectSize(UINT32 cbMap)
     {
         LIMITED_METHOD_CONTRACT;
-        return (UINT32)(sizeof(DispatchMap) + cbMap);
+        return (UINT32)(sizeof(DispatchMap) + cbMap); // 这里的sizeof会返回1，但是object size是不是只需要是cbMap
     }
 
     //------------------------------------------------------------------------

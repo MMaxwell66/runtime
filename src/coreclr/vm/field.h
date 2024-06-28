@@ -36,7 +36,7 @@ class FieldDesc
     friend class MethodTableBuilder;
 
   protected:
-    PTR_MethodTable m_pMTOfEnclosingClass;  // This is used to hold the log2 of the field size temporarily during class loading.  Yuck.
+    PTR_MethodTable m_pMTOfEnclosingClass;  // This is used to hold the log2 of the field size temporarily during class loading.  Yuck. // 在之后，指向所属class的mt
 
     // See also: FieldDesc::InitializeFrom method
 

@@ -971,7 +971,7 @@ public:
         GetOptionalFields()->m_cbModuleDynamicID = cbModuleDynamicID;
     }
 
-    /*
+    /* // 这个好像不是字面意思，从相关的代码看，这个是dynamic static的bytes,在8.0这个通常为0
      * Difference between the InterfaceMap ptr and Vtable in the
      * MethodTable used to indicate the number of static bytes
      * Now interfaceMap ptr can be optional hence we store it here
@@ -986,7 +986,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         SetPackableField(EEClass_Field_NonGCStaticFieldBytes, cbNonGCStaticFieldBytes);
     }
-
+//同上，在8.0这个通常为0
     inline DWORD GetNonGCThreadStaticFieldBytes()
     {
         LIMITED_METHOD_CONTRACT;
@@ -997,7 +997,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         SetPackableField(EEClass_Field_NonGCThreadStaticFieldBytes, cbNonGCStaticFieldBytes);
     }
-
+// non-virtual slots, might inside vtable
     inline WORD GetNumNonVirtualSlots()
     {
         LIMITED_METHOD_CONTRACT;
@@ -1079,7 +1079,7 @@ public:
         SetPackableField(EEClass_Field_NumBoxedThreadStatics, wNumBoxedThreadStatics);
     }
 
-    /*
+    /* // GetBaseSize - field size, 包括 header, mt, last padding bytes
      * Number of bytes to subract from code:MethodTable::GetBaseSize() to get the actual number of bytes
      * of instance fields stored in the object on the GC heap.
      */
@@ -1126,7 +1126,7 @@ public:
         m_pFieldDescList = pFieldDescList;
     }
 #endif // !DACCESS_COMPILE
-
+// bmtVT->cTotalSlots (include non-vtable methods)
     inline WORD GetNumMethods()
     {
         LIMITED_METHOD_DAC_CONTRACT;
@@ -1458,7 +1458,7 @@ public:
     /*
      * The CorElementType for this class (most classes = ELEMENT_TYPE_CLASS)
      */
-public:
+public: // For !Array, ELEMENT_TYPE_CLASS for class, ELEMENT_TYPE_VALUETYPE for value type, underlying type for enum (in SetupMethodTable2, 见下面第二个SetInternalCorElementType)
     // This is what would be used in the calling convention for this type.
     CorElementType  GetInternalCorElementType()
     {

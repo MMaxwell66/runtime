@@ -10604,7 +10604,7 @@ MethodTableBuilder::SetupMethodTable2(
         pMT->SetIsInterface();
 
     if (GetParentMethodTable() != NULL)
-    {
+    {// 如果是这个逻辑的话，是不是和object不是一个module就一定是true?
         if (GetParentMethodTable()->HasModuleDependencies())
         {
             pMT->SetHasModuleDependencies();
@@ -10921,8 +10921,8 @@ MethodTableBuilder::SetupMethodTable2(
                     pMT->SetSlot(iCurSlot, addr);
                 }
 
-                if (pMD->GetSlot() == iCurSlot && pMD->RequiresStableEntryPoint())
-                {
+                if (pMD->GetSlot() == iCurSlot && pMD->RequiresStableEntryPoint()) // 第一个条件应该是filter override/methodImpl?
+                { //一些实例：.ctor, non-virtual method
                     // The rest of the system assumes that certain methods always have stable entrypoints.
                     // Create them now.
                     pMD->GetOrCreatePrecode();
@@ -11683,7 +11683,7 @@ VOID MethodTableBuilder::HandleGCForValueClasses(MethodTable ** pByValueClassCac
         pSeries = ((CGCDesc*)pMT)->GetLowestSeries();
         if (bmtFP->NumInstanceGCPointerFields)
         {
-            // See gcdesc.h for an explanation of why we adjust by subtracting BaseSize
+            // See gcdesc.h for an explanation of why we adjust by subtracting BaseSize //为了统一array和object减少条件判断
             pSeries->SetSeriesSize((size_t)(bmtFP->NumInstanceGCPointerFields * repeat * TARGET_POINTER_SIZE) - (size_t)pMT->GetBaseSize());
             pSeries->SetSeriesOffset(bmtFP->GCPointerFieldStart + OBJECT_SIZE);
             pSeries++;

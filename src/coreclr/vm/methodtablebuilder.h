@@ -37,8 +37,8 @@ public:
         // 请参考“Design and Implementation of Generics for the .NET Common Language Runtime”，基本上就是说这个T在各个地方（field，method之类的）可能的使用情况。比如说 T, List<T>, Dictionary<T, List<T>> ... 然后是在处理过程中动态生成的，所以初始化为1对于Generic type.
         WORD numDicts;                  // Number of dictionaries including this class
         BYTE *pVarianceInfo;            // Variance annotations on type parameters, NULL if none specified  // 协变、逆变, from GenericParam's flag
-        BOOL fTypicalInstantiation;     // TRUE if this is generic type definition  // 感觉就是说是不是 List<> 这种没有提供具体的type
-        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations // see IsCanonicalSubtype comments，应该是说Generic的任意部分涉及到<__Canon>
+        BOOL fTypicalInstantiation;     // TRUE if this is generic type definition  // 感觉就是说是不是 List<> 这种没有提供具体的type //根据enum_flag_GenericsMask_TypicalInst说法，指的是List<T>
+        BOOL fSharedByGenericInstantiations; // TRUE if this is canonical type shared by instantiations // see IsCanonicalSubtype comments，应该是说Generic的任意部分涉及到<__Canon> //根据enum_flag_GenericsMask_SharedInst说的是 List<__Canon> or List<MyValueType<__Canon>>
         BOOL fContainsGenericVariables; // TRUE if this is an open type // 嗯，和fTypicalInstantiation的区别的是什么？
 
         inline bmtGenericsInfo() { LIMITED_METHOD_CONTRACT; memset((void *)this, NULL, sizeof(*this)); }
