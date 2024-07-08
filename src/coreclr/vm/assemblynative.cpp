@@ -166,10 +166,10 @@ Assembly* AssemblyNative::LoadFromPEImage(AssemblyBinder* pBinder, PEImage *pIma
         COMPlusThrowHR(COR_E_FILELOAD, dwMessageID, name);
     }
 
-    PEAssemblyHolder pPEAssembly(PEAssembly::Open(pAssembly->GetPEImage(), pAssembly));
+    PEAssemblyHolder pPEAssembly(PEAssembly::Open(pAssembly->GetPEImage(), pAssembly)); //不确定目的，但至少这里的`->GetPEImage`模式下，这个是和PEAssembly::Open(pAssembly)一样的，也就是LoadFromAssemblyName code path下面的PEAssembly初始化方面
     bindOperation.SetResult(pPEAssembly.GetValue());
 
-    DomainAssembly *pDomainAssembly = pCurDomain->LoadDomainAssembly(&spec, pPEAssembly, FILE_LOADED);
+    DomainAssembly *pDomainAssembly = pCurDomain->LoadDomainAssembly(&spec, pPEAssembly, FILE_LOADED); // 如果MVID都相同的话，PEAssembly是不同的实例，但是连接到的HostAssembly(Binder space)是相同的，所以最后解出来的DomainAssembly是同一个
     RETURN pDomainAssembly->GetAssembly();
 }
 

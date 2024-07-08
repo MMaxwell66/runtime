@@ -723,7 +723,7 @@ extern "C" BOOL QCALLTYPE LoaderAllocator_Destroy(QCall::LoaderAllocatorHandle p
 }
 
 #define MAX_LOADERALLOCATOR_HANDLE 0x40000000
-
+// 对于collectable，这个是从 managed LoaderAllocator.m_slots 里面去分配，而不是GC handle
 // Returns NULL if the managed LoaderAllocator object was already collected.
 LOADERHANDLE LoaderAllocator::AllocateHandle(OBJECTREF value)
 {

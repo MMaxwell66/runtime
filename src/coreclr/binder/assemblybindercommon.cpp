@@ -43,7 +43,7 @@ namespace BINDER_SPACE
 {
     namespace
     {
-        //
+        // 没有复杂的只允许minor的那些logic，基本上就是要求found version >= request version
         // This defines the assembly equivalence relation
         //
         bool IsCompatibleAssemblyVersion(/* in */ AssemblyName *pRequestedName,
@@ -336,7 +336,7 @@ namespace BINDER_SPACE
     }
 
 
-    /* static */
+    /* static */  // systemDirectory/cultureName/simpleName.dll
     HRESULT AssemblyBinderCommon::BindToSystemSatellite(SString& systemDirectory,
         SString& simpleName,
         SString& cultureName,
@@ -388,7 +388,7 @@ namespace BINDER_SPACE
         return hr;
     }
 
-    /* static */
+    /* static */ // 1. ExecutionContext中已有的 // 2. TPA if supported
     HRESULT AssemblyBinderCommon::BindByName(ApplicationContext *pApplicationContext,
                                        AssemblyName       *pAssemblyName,
                                        bool                skipFailureCaching,
@@ -463,7 +463,7 @@ namespace BINDER_SPACE
         return hr;
     }
 
-    /* static */
+    /* static */ // 1. ExecutionContext中已有的
     HRESULT AssemblyBinderCommon::BindLocked(ApplicationContext *pApplicationContext,
                                              AssemblyName       *pAssemblyName,
                                              bool                skipVersionCompatibilityCheck,
@@ -472,7 +472,7 @@ namespace BINDER_SPACE
     {
         HRESULT hr = S_OK;
 
-        bool isTpaListProvided = pApplicationContext->IsTpaListProvided();
+        bool isTpaListProvided = pApplicationContext->IsTpaListProvided(); // true for default binder
         Assembly *pAssembly = NULL;
         hr = FindInExecutionContext(pApplicationContext, pAssemblyName, &pAssembly);
 

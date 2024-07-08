@@ -87,7 +87,7 @@ STDAPI BinderAcquirePEImage(LPCWSTR             wszAssemblyPath,
 
     EX_TRY
     {
-        PEImageHolder pImage = PEImage::OpenImage(wszAssemblyPath, MDInternalImport_Default, bundleFileLocation);
+        PEImageHolder pImage = PEImage::OpenImage(wszAssemblyPath, MDInternalImport_Default, bundleFileLocation); // 存在全局的static cache
 
         // Make sure that the IL image can be opened.
         hr=pImage->TryOpenFile();   // Just CreateFile
@@ -304,7 +304,7 @@ void BaseAssemblySpec::InitializeWithAssemblyIdentity(BINDER_SPACE::AssemblyIden
 
 namespace
 {
-    PEKIND GetProcessorArchitectureFromAssemblyFlags(DWORD flags)
+    PEKIND GetProcessorArchitectureFromAssemblyFlags(DWORD flags) // 这个非常怪，这个应该是 & afPA_Mask 之后用，而不是一个 flag。但是managed code里面，ProcessorArchitecture是已经obsolete的了。
     {
         if (flags & afPA_MSIL)
             return peMSIL;

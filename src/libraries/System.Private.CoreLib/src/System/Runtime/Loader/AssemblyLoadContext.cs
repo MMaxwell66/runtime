@@ -45,7 +45,7 @@ namespace System.Runtime.Loader
         // and MonoManagedAssemblyLoadContext in object-internals.h
 
         // Contains the reference to VM's representation of the AssemblyLoadContext
-        private readonly IntPtr _nativeAssemblyLoadContext;
+        private readonly IntPtr _nativeAssemblyLoadContext; // DefaultAssemblyBinder for .Default, CustomAssemblyBinder for others
 #endregion
 
         // synchronization primitive to protect against usage of this instance while unloading
@@ -307,7 +307,7 @@ namespace System.Runtime.Loader
 
             return AssemblyName.GetAssemblyName(assemblyPath);
         }
-
+        // 顺序见native: CustomAssemblyBinder::BindUsingAssemblyName
         // Custom AssemblyLoadContext implementations can override this
         // method to perform custom processing and use one of the protected
         // helpers above to load the assembly.

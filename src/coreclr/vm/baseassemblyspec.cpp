@@ -16,7 +16,7 @@
 #include "strongnameinternal.h"
 #include "strongnameholders.h"
 
-BOOL BaseAssemblySpec::IsCoreLib()
+BOOL BaseAssemblySpec::IsCoreLib() // name=="System\.Private\.CoreLib(\.dll|$|,.*)"
 {
     CONTRACTL
     {
@@ -49,7 +49,7 @@ BOOL BaseAssemblySpec::IsCoreLib()
 // System.Private.CoreLib.debug.resources.dll and uses the same public key as CoreLib.
 // It does not necessarily have the same version, and the Culture will
 // always be set to something like "jp-JP".
-BOOL BaseAssemblySpec::IsCoreLibSatellite() const
+BOOL BaseAssemblySpec::IsCoreLibSatellite() const // name=="System\.Private\.CoreLib\.resources($|,.*)" && public key binary match
 {
     CONTRACTL
     {

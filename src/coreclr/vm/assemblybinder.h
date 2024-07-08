@@ -125,7 +125,7 @@ private:
 
     // A GC handle to the managed AssemblyLoadContext.
     // It is a long weak handle for collectible AssemblyLoadContexts and strong handle for non-collectible ones.
-    INT_PTR m_ptrManagedAssemblyLoadContext;
+    INT_PTR m_ptrManagedAssemblyLoadContext; // 对于Default，如果在managed没有放过过.Default static的话，这个会是null
 
     SArray<Assembly*> m_loadedAssemblies;
 };

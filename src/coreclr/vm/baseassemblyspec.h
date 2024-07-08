@@ -26,7 +26,7 @@ protected:
     DWORD                       m_cbPublicKeyOrToken;
     DWORD                       m_dwFlags;             // CorAssemblyFlags
     int                         m_ownedFlags;
-    AssemblyBinder             *m_pBinder;
+    AssemblyBinder             *m_pBinder; //这个是实际bind使用的binder，似乎一般不会直接设置，而是在bind wrapper中，通过fallback binder/parent assembly来设置
 
 public:
     enum

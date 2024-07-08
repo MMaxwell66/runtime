@@ -70,9 +70,9 @@ namespace BINDER_SPACE
     private:
         LONG                     m_cRef;
         PEImage                 *m_pPEImage;
-        AssemblyName            *m_pAssemblyName;
+        AssemblyName            *m_pAssemblyName; // from Assembly#1, is_definition
         PTR_AssemblyBinder       m_pBinder;
-        bool                     m_isInTPA;
+        bool                     m_isInTPA; //case1: SystemSatellite
         DomainAssembly          *m_domainAssembly;
 
 #if !defined(DACCESS_COMPILE)

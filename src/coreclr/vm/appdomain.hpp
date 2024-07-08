@@ -2199,7 +2199,7 @@ private:
 
     Volatile<Stage> m_Stage;
 
-    ArrayList        m_failedAssemblies;
+    ArrayList        m_failedAssemblies; // for debugger purpose
 
     //
     // DAC iterator for failed assembly loads
@@ -2257,7 +2257,7 @@ public:
         IGNORE_UNHANDLED_EXCEPTIONS =      0x10000, // AppDomain was created using the APPDOMAIN_IGNORE_UNHANDLED_EXCEPTIONS flag
     };
 
-    AssemblySpecBindingCache  m_AssemblyCache;
+    AssemblySpecBindingCache  m_AssemblyCache; //spec(name+binder)->AssemblyBinding
     size_t                    m_MemoryPressure;
 
     ArrayList m_NativeDllSearchDirectories; // "NATIVE_DLL_SEARCH_DIRECTORIES" of the coreclr initialize properties

@@ -154,7 +154,7 @@ public:
         return GetPEAssembly()->GetDebugName();
     }
 #endif
-
+    // from LoaderAllocator, false for Global, true for AssemblyLoaderAllocator
     BOOL IsCollectible()
     {
         LIMITED_METHOD_CONTRACT;

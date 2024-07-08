@@ -1486,7 +1486,7 @@ class AssemblyLoadContextBaseObject : public Object
     AssemblyLoadContextBaseObject() { LIMITED_METHOD_CONTRACT; }
    ~AssemblyLoadContextBaseObject() { LIMITED_METHOD_CONTRACT; }
 
-  public:
+  public: // DefaultAssemblyBinder for .Default, CustomAssemblyBinder for others
     INT_PTR GetNativeAssemblyBinder() { LIMITED_METHOD_CONTRACT; return _nativeAssemblyLoadContext; }
 };
 #if defined(TARGET_X86) && !defined(TARGET_UNIX)

@@ -407,7 +407,7 @@ private:
     union
     {
 #ifndef DACCESS_COMPILE
-        IMDInternalImport* m_pMDImport;
+        IMDInternalImport* m_pMDImport;//case1: m_PEImage->m_pMDImport
 #else
         // NB: m_pMDImport_UseAccessor appears to be never assigned a value, but its purpose is just
         //     to be a placeholder that has the same type and offset as m_pMDImport.

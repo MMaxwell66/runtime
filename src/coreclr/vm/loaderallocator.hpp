@@ -390,7 +390,7 @@ protected:
     PTR_VirtualCallStubManager m_pVirtualCallStubManager;
 
 private:
-    LoaderAllocatorSet m_LoaderAllocatorReferences;
+    LoaderAllocatorSet m_LoaderAllocatorReferences; //case1: AssemblyLoadContext返回一个属于其它ALC的Assembly，它是collectable的，所以第一个ALC要引用第二个ALC去保证第二个ALC不早于第一个被回收。//这个没什么问题，但是必要吗？感觉会有对应的managed的引用存在吧，还需要native的track吗，不过完全没有仔细想过。
     Volatile<UINT32>   m_cReferences;
     // This will be set by code:LoaderAllocator::Destroy (from managed scout finalizer) and signalizes that
     // the assembly was collected
@@ -871,7 +871,7 @@ class AssemblyLoaderAllocator : public LoaderAllocator
 
 protected:
     DAC_ALIGNAS(LoaderAllocator) // Align the first member to the alignment of the base class
-    LoaderAllocatorID  m_Id;
+    LoaderAllocatorID  m_Id; // a. single list by DomainAssembly.m_NextDomainAssemblyInSameALC
     ShuffleThunkCache* m_pShuffleThunkCache;
 public:
     virtual LoaderAllocatorID* Id();

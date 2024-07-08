@@ -36,7 +36,7 @@ HRESULT DefaultAssemblyBinder::BindAssemblyByNameWorker(BINDER_SPACE::AssemblyNa
 }
 
 // ============================================================================
-// DefaultAssemblyBinder implementation
+// DefaultAssemblyBinder implementation // Custom那边的注释更多一点，虽然两者有差异，但结构大体相同
 // ============================================================================
 HRESULT DefaultAssemblyBinder::BindUsingAssemblyName(BINDER_SPACE::AssemblyName *pAssemblyName,
                                                      BINDER_SPACE::Assembly **ppAssembly)

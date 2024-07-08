@@ -2264,7 +2264,7 @@ public:
         LIMITED_METHOD_CONTRACT;
         SetFlag(enum_flag_HasCriticalFinalizer);
     }
-    // Does this class have non-trivial finalization requirements?
+    // Does this class have non-trivial finalization requirements? // 就是说Finalize对应的slot不是原始实现
     DWORD HasFinalizer()
     {
         LIMITED_METHOD_DAC_CONTRACT;

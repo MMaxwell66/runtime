@@ -79,7 +79,7 @@ HRESULT CustomAssemblyBinder::BindUsingAssemblyName(BINDER_SPACE::AssemblyName* 
                 // We maybe returned an assembly that was bound to a different AssemblyBinder instance.
                 // In such a case, we will not overwrite the binder (which would be wrong since the assembly would not
                 // be present in the cache of the current binding context).
-                if (pCoreCLRFoundAssembly->GetBinder() == NULL)
+                if (pCoreCLRFoundAssembly->GetBinder() == NULL) // 我好奇的是什么情况下会是null，因为感觉上面没有主动加载的，应该都是通过LoadFromAssemblyPath之类加载的，那些应该已经设置过binder了吧。
                 {
                     pCoreCLRFoundAssembly->SetBinder(this);
                 }

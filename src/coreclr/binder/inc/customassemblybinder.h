@@ -50,7 +50,7 @@ public:
 private:
     HRESULT BindAssemblyByNameWorker(BINDER_SPACE::AssemblyName *pAssemblyName, BINDER_SPACE::Assembly **ppCoreCLRFoundAssembly);
 
-    DefaultAssemblyBinder *m_pDefaultBinder;
+    DefaultAssemblyBinder *m_pDefaultBinder; //m_pTheAppDomain->m_pDefaultBinder
 
     // A strong GC handle to the managed AssemblyLoadContext. This handle is set when the unload of the AssemblyLoadContext is initiated
     // to keep the managed AssemblyLoadContext alive until the unload is finished.
@@ -58,8 +58,8 @@ private:
     // to refer to it during the whole lifetime of the AssemblyLoadContext.
     INT_PTR m_ptrManagedStrongAssemblyLoadContext;
 
-    AssemblyLoaderAllocator* m_pAssemblyLoaderAllocator;
-    void* m_loaderAllocatorHandle;
+    AssemblyLoaderAllocator* m_pAssemblyLoaderAllocator; // not null if collectable
+    void* m_loaderAllocatorHandle; // strong handle to managed LoaderAllocator
 };
 
 #endif // !defined(DACCESS_COMPILE)

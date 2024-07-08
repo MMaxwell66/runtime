@@ -23,18 +23,18 @@ class AppDomain;
 class Assembly;
 class DomainAssembly;
 enum FileLoadLevel;
-
+//核心就是一个full name+binder
 class AssemblySpec  : public BaseAssemblySpec
 {
   private:
     AppDomain       *m_pAppDomain;
-    DomainAssembly  *m_pParentAssembly;
+    DomainAssembly  *m_pParentAssembly; //1.不传入ALC的时候，调用相关load函数的函数所在的程序集；2.GetSatelliteAssembly的时候，主程序集
 
     // Contains the reference to the fallback load context associated with RefEmitted assembly requesting the load of another assembly (static or dynamic)
-    AssemblyBinder *m_pFallbackBinder;
+    AssemblyBinder *m_pFallbackBinder; //这个所谓的fallback是相对于parent assembly而言的 // AssemblyLoadContext's CustomerAssemblyBinder set to here
 
     // Flag to indicate if we should prefer the fallback load context binder for binding or not.
-    bool m_fPreferFallbackBinder;
+    bool m_fPreferFallbackBinder; // true for AssemblyLoadContext
 
     HRESULT InitializeSpecInternal(mdToken kAssemblyRefOrDef,
                                    IMDInternalImport *pImport,
@@ -304,8 +304,8 @@ class AssemblySpecHash
 
     static BOOL CompareSpecs(UPTR u1, UPTR u2);
 };
-
-
+// 核心就是 AssemblySpec 的一个hash map, hash是spec.Hash() ^ spec.binger 所以是区分了binder的
+// hash存的值似乎是AssemblyBinding，而查找的key是AssemblySpec，用了AssemblyBinding的第一个field是AssemblySpec的假设
 class AssemblySpecBindingCache
 {
     friend class AssemblyBindingHolder;

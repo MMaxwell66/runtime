@@ -112,9 +112,9 @@ namespace BINDER_SPACE
         inline void IncrementVersion();
 
     private:
-        Volatile<LONG>     m_cVersion;
+        Volatile<LONG>     m_cVersion; //1. inc in AddToFailureCache
         SString            m_applicationName;
-        ExecutionContext  *m_pExecutionContext;
+        ExecutionContext  *m_pExecutionContext; // each app ctx has its own, map name->Binder::Assembly
         FailureCache      *m_pFailureCache;
         CRITSEC_COOKIE     m_contextCS;
 

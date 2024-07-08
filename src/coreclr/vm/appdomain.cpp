@@ -85,7 +85,7 @@ static const WCHAR DEFAULT_DOMAIN_FRIENDLY_NAME[] = W("DefaultDomain");
 #define STATIC_OBJECT_TABLE_BUCKET_SIZE 1020
 
 // Statics
-
+// 一个区别是 System.Private.CoreLib 存在 system domain，而其他assembly都在app domain
 SPTR_IMPL(AppDomain, AppDomain, m_pTheAppDomain);
 SPTR_IMPL(SystemDomain, SystemDomain, m_pSystemDomain);
 
@@ -3078,7 +3078,7 @@ DomainAssembly * AppDomain::FindAssembly(PEAssembly * pPEAssembly, FindAssemblyO
 
     const bool includeFailedToLoad = (options & FindAssemblyOptions_IncludeFailedToLoad) != 0;
 
-    if (pPEAssembly->HasHostAssembly())     // for file based, this is true, but when this is false?
+    if (pPEAssembly->HasHostAssembly())     // for file based, this is true, but when this is false? //只是加速下面的iter还是会有不同？
     {
         DomainAssembly * pDA = pPEAssembly->GetHostAssembly()->GetDomainAssembly();
         if (pDA != nullptr && (pDA->IsLoaded() || (includeFailedToLoad && pDA->IsError())))
@@ -3457,7 +3457,7 @@ PEAssembly* AppDomain::FindCachedFile(AssemblySpec* pSpec, BOOL fThrow /*=TRUE*/
     return m_AssemblyCache.LookupFile(pSpec, fThrow);
 }
 
-
+// event: AppDomain.AssemblyResolve
 BOOL AppDomain::PostBindResolveAssembly(AssemblySpec  *pPrePolicySpec,
                                         AssemblySpec  *pPostPolicySpec,
                                         HRESULT        hrBindResult,
@@ -3516,7 +3516,6 @@ PEAssembly * AppDomain::BindAssemblySpec(
     GCX_PREEMP();
 
     BOOL fForceReThrow = FALSE;
-
     BinderTracing::AssemblyBindOperation bindOperation(pSpec);
 
     HRESULT hrBindResult = S_OK;
@@ -3596,7 +3595,7 @@ PEAssembly * AppDomain::BindAssemblySpec(
         }
 
         {
-            BOOL fFailure = PostBindResolveAssembly(pSpec, &NewSpec, ex->GetHR(), &pFailedSpec);
+            BOOL fFailure = PostBindResolveAssembly(pSpec, &NewSpec, ex->GetHR(), &pFailedSpec); // 这里不会throw吗？
             if (fFailure)
             {
                 BOOL bFileNotFoundException =
@@ -4914,7 +4913,7 @@ HRESULT RuntimeInvokeHostAssemblyResolver(INT_PTR pManagedAssemblyLoadContextToB
 
     EX_TRY
     {
-        if (pDefaultBinder != NULL)
+        if (pDefaultBinder != NULL) // Custom
         {
             // Step 2 (of CustomAssemblyBinder::BindAssemblyByName) - Invoke Load method
             // This is not invoked for TPA Binder since it always returns NULL.
@@ -5024,7 +5023,7 @@ HRESULT RuntimeInvokeHostAssemblyResolver(INT_PTR pManagedAssemblyLoadContextToB
 
             // We were able to get the assembly loaded. Now, get its name since the host could have
             // performed the resolution using an assembly with different name.
-            DomainAssembly *pDomainAssembly = _gcRefs.oRefLoadedAssembly->GetDomainAssembly();
+            DomainAssembly *pDomainAssembly = _gcRefs.oRefLoadedAssembly->GetDomainAssembly(); // 感觉这里是个bug，里面上传进来的有可能是一个RuntimeAssemblyBuilder，它的大小只有0x20，而domain assembly在0x20的offset上，按理说是一个overflow
             PEAssembly *pLoadedPEAssembly = NULL;
             bool fFailLoad = false;
             if (!pDomainAssembly)

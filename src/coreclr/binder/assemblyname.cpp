@@ -43,7 +43,7 @@ namespace BINDER_SPACE
         SetHave(AssemblyIdentity::IDENTITY_FLAG_CULTURE |
                 AssemblyIdentity::IDENTITY_FLAG_PUBLIC_KEY_TOKEN_NULL);
     }
-
+    // Assembly#1
     HRESULT AssemblyName::Init(PEImage* pPEImage)
     {
         HRESULT hr = S_OK;
