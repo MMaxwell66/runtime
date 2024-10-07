@@ -20,7 +20,7 @@
 
 #include "gcinfodecoder.h"
 
-#ifdef FEATURE_EH_FUNCLETS
+#ifdef FEATURE_EH_FUNCLETS // 这个是从WIN64EXCEPTIONS rename过来的，按照GPT的说法，是指代那些compiler生成的exception处理时clean up的small code snippet
 #define PROCESS_EXPLICIT_FRAME_BEFORE_MANAGED_FRAME
 #endif
 
@@ -973,7 +973,7 @@ StackWalkAction Thread::StackWalkFrames(PSTACKWALKFRAMESCALLBACK pCallback,
 
     if(fUseInitRegDisplay)
     {
-        if (GetProfilerFilterContext() != NULL)
+        if (GetProfilerFilterContext() != NULL)// 你可能会疑问那debugger那个呢。点进init去看，相当混乱的代码。
         {
             if (!InitRegDisplay(&rd, GetProfilerFilterContext(), TRUE))
             {
@@ -991,7 +991,7 @@ StackWalkAction Thread::StackWalkFrames(PSTACKWALKFRAMESCALLBACK pCallback,
         }
     }
     else
-    {
+    { //关于为什么不调用`GetThreadContext`，我感觉是因为unmanged是靠Frame来做的，不需要unmanged下的register状态。
         // Initialize the context
         memset(&ctx, 0x00, sizeof(T_CONTEXT));
         SetIP(&ctx, 0);
@@ -2337,7 +2337,7 @@ StackWalkAction StackFrameIterator::NextRaw(void)
         {
             // there are more skipped explicit frames
             _ASSERTE(m_frameState == SFITER_SKIPPED_FRAME_FUNCTION);
-            goto Cleanup;
+            goto Cleanup; // 为啥不用ProcessCurrentFrame？
         }
         else
         {
@@ -2558,7 +2558,7 @@ StackWalkAction StackFrameIterator::NextRaw(void)
         }
     }
     else if (m_frameState == SFITER_FRAME_FUNCTION)
-    {
+    {//关于这里我的问题是：这个state说明当前的current是这个frame,next应该是下个frame或者managed，为什么这里还在拿各种当前frame的flag，ret之类的？
         Frame* pInlinedFrame = NULL;
 
         if (InlinedCallFrame::FrameHasActiveCall(m_crawl.pFrame))
@@ -2594,7 +2594,7 @@ StackWalkAction StackFrameIterator::NextRaw(void)
 
             if (m_crawl.isFrameless)
             {
-                m_crawl.pFrame->UpdateRegDisplay(m_crawl.pRD);
+                m_crawl.pFrame->UpdateRegDisplay(m_crawl.pRD); // 对于inlined, 恢复到从`JIT_PInvokeBegin` ret之后的有效状态
 
 #if defined(RECORD_RESUMABLE_FRAME_SP)
                 CONSISTENCY_CHECK(NULL == m_pvResumableFrameTargetSP);
@@ -2893,7 +2893,7 @@ void StackFrameIterator::ProcessCurrentFrame(void)
             //------------------------------------------------------------------------
 
 #if !defined(DACCESS_COMPILE)
-            m_crawl.isCachedMethod = FALSE;
+            m_crawl.isCachedMethod = FALSE; // removed in https://github.com/dotnet/runtime/pull/99137
             if (m_crawl.stackWalkCache.Enabled() && (m_flags & LIGHTUNWIND))
             {
                 m_crawl.isCachedMethod = m_crawl.stackWalkCache.Lookup((UINT_PTR)GetControlPC(m_crawl.pRD));
@@ -2954,7 +2954,7 @@ void StackFrameIterator::ProcessCurrentFrame(void)
 //    because it doesn't unwind one frame ahead of time like WIN64 does.  This means that we don't
 //    have the caller SP on x86.
 //
-
+// 这边skip的一个原因是对于Inlined, 它的ret ip进行查找codeInfo的时候会找到包含它的manged,从而skip了这个inlined frame
 BOOL StackFrameIterator::CheckForSkippedFrames(void)
 {
     WRAPPER_NO_CONTRACT;
@@ -3285,7 +3285,7 @@ each cache entry into 8 bytes.
 #endif
 #define NUM_OF_CACHE_ENTRIES (1 << LOG_NUM_OF_CACHE_ENTRIES)
 
-static StackwalkCacheEntry g_StackwalkCache[NUM_OF_CACHE_ENTRIES] = {}; // Global StackwalkCache
+static StackwalkCacheEntry g_StackwalkCache[NUM_OF_CACHE_ENTRIES] = {}; // Global StackwalkCache // align定义在StackwalkCacheEntry上
 
 #ifdef DACCESS_COMPILE
 const BOOL StackwalkCache::s_Enabled = FALSE;

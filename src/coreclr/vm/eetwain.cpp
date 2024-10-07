@@ -3301,7 +3301,7 @@ unsigned SKIP_ALLOC_FRAME(int size, PTR_CBYTE base, unsigned offset)
 
 
 #if defined(FEATURE_EH_FUNCLETS)
-
+// 这个调用了 `RtlVirtualUnwind` 传入的 runction data是runtime自己维护的，其内容等价于 `RtlLookupFunctionEntry` 得到的（准确的说有一个debug assert验证了一个数据的binary相等性）
 void EECodeManager::EnsureCallerContextIsValid( PREGDISPLAY  pRD, StackwalkCacheEntry* pCacheEntry, EECodeInfo * pCodeInfo /*= NULL*/ )
 {
     CONTRACTL

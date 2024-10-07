@@ -950,7 +950,7 @@ public:
 
     // Does the method has virtual slot? Note that methods implementing interfaces
     // on value types do not have virtual slots, but they are marked as virtual in metadata.
-    inline BOOL IsVtableMethod()
+    inline BOOL IsVtableMethod() // 从代码来看要求virtual，也就是说不包括non virtual slot?
     {
         LIMITED_METHOD_CONTRACT;
         MethodTable *pMT = GetMethodTable();

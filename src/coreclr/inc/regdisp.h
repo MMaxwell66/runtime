@@ -12,7 +12,7 @@ void CheckRegDisplaySP (REGDISPLAY *pRD);
 #endif // DEBUG_REGDISPLAY
 
 struct REGDISPLAY_BASE {
-    PT_CONTEXT pContext;    // This is the context of the active call frame;
+    PT_CONTEXT pContext;    // This is the context of the active call frame; // [arm] 根据InlinedCallFrame::UpdateRegDisplay的comments, it's only valid for active (top-most) frame
                             // either returned by GetContext or provided at
                             // exception time.
                             //
@@ -231,7 +231,7 @@ typedef struct _Riscv64VolatileContextPointer
     PDWORD64 T6;
 } Riscv64VolatileContextPointer;
 #endif
-
+// 从内容来看，reg display 维护了多个T_CONTEXT和一些其他的，感觉是所有unwind时候需要用的context?通过两个交替节约内存?但是这个名字有点不知所云。
 struct REGDISPLAY : public REGDISPLAY_BASE {
 #ifdef TARGET_ARM64
     Arm64VolatileContextPointer     volatileCurrContextPointers;

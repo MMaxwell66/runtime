@@ -460,7 +460,7 @@ private:
     CodeManState      codeManState;
 
     bool              isFrameless;
-    bool              isFirst;
+    bool              isFirst; // 栈顶？
 
     // The next three fields are only valid for managed stack frames.  They are set using attributes
     // on explicit frames, and they are reset after processing each managed stack frame.
@@ -473,7 +473,7 @@ private:
     bool              isNoFrameTransition;
     TADDR             taNoFrameTransitionMarker;    // see code:CrawlFrame.GetNoFrameTransitionMarker
     PTR_Frame         pFrame;
-    MethodDesc       *pFunc;
+    MethodDesc       *pFunc; // if framefull, then pFrame->GetFunction
 
     // the rest is only used for "frameless methods"
     PREGDISPLAY       pRD; // "thread context"/"virtual register set"
@@ -613,11 +613,11 @@ public:
         SFITER_NO_FRAME_TRANSITION,         // no-frame transition (currently used for ExInfo only)
         SFITER_NATIVE_MARKER_FRAME,         // the native stack frame immediately below (stack grows up)
                                             // a managed stack region
-        SFITER_INITIAL_NATIVE_CONTEXT,      // initial native seed CONTEXT
+        SFITER_INITIAL_NATIVE_CONTEXT,      // initial native seed CONTEXT // 代表 stackwalk 实在native触发的// 浅薄的分析这个是指到CONTEXT本身，而不是CONTEXT所属于的frame，这么做的原因不确定，得出这个结论的原因见设计NOTIFY_ON_INITIAL_NATIVE_CONTEXT的code，以及第一次Filter和其后的NextRaw的逻辑
         SFITER_DONE,                        // the iterator has reached the end of the stack
     };
     FrameState GetFrameState() {LIMITED_METHOD_DAC_CONTRACT; return m_frameState;}
-
+    // 这个是iter的current
     CrawlFrame m_crawl;
 
 #if defined(_DEBUG)

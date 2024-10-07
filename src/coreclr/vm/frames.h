@@ -2884,20 +2884,20 @@ public:
     // X86: ESP after pushing the outgoing arguments, and just before calling
     // out to unmanaged code.
     // Other platforms: the field stays set throughout the declaring method.
-    PTR_VOID             m_pCallSiteSP;
+    PTR_VOID             m_pCallSiteSP; // managed stack rsp
 
     // EIP where the unmanaged call will return to. This will be a pointer into
     // the code of the managed frame which has the InlinedCallFrame
     // This is set to NULL in the method prolog. It gets set just before the
     // call to the target and reset back to NULL after the stop-for-GC check
     // following the call.
-    TADDR                m_pCallerReturnAddress;
+    TADDR                m_pCallerReturnAddress; // rip in the manged code, ret of `JIT_PInvokeBegin`
 
     // This is used only for EBP. Hence, a stackwalk will miss the other
     // callee-saved registers for the method with the InlinedCallFrame.
     // To prevent GC-holes, we do not keep any GC references in callee-saved
     // registers across an NDirect call.
-    TADDR                m_pCalleeSavedFP;
+    TADDR                m_pCalleeSavedFP; // managed stack rbp
 
     // This field is used to cache the current thread object where this frame is
     // executing. This is especially helpful on Unix platforms for the PInvoke assembly

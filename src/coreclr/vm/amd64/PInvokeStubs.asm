@@ -146,7 +146,7 @@ LEAF_ENTRY JIT_PInvokeBegin, _TEXT
         add             rcx, SIZEOF_GSCookie
 
         ;; set first slot to the value of InlinedCallFrame::`vftable' (checked by runtime code)
-        lea             rax,[??_7InlinedCallFrame@@6B@]
+        lea             rax,[??_7InlinedCallFrame@@6B@] ;; use `undname` to undecorated, -> "const InlinedCallFrame::`vftable'"
         mov             qword ptr [rcx], rax
 
         mov             qword ptr [rcx + OFFSETOF__InlinedCallFrame__m_Datum], 0
@@ -157,7 +157,7 @@ LEAF_ENTRY JIT_PInvokeBegin, _TEXT
         mov             qword ptr [rcx + OFFSETOF__InlinedCallFrame__m_pCalleeSavedFP], rbp
 
         mov             rax, [rsp]
-        mov             qword ptr [rcx + OFFSETOF__InlinedCallFrame__m_pCallerReturnAddress], rax
+        mov             qword ptr [rcx + OFFSETOF__InlinedCallFrame__m_pCallerReturnAddress], rax ;; 这是JIT_PInvokeBegin的return address不知道会不会对frame有影响
 
         INLINE_GETTHREAD rax
         ;; pFrame->m_Next = pThread->m_pFrame;

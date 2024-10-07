@@ -2289,7 +2289,7 @@ static PCODE PreStubWorker_Preemptive(
     _In_ MethodDesc* pMD,
     _In_opt_ Thread* currentThread)
 {
-    _ASSERTE(pMD->HasUnmanagedCallersOnlyAttribute());
+    _ASSERTE(pMD->HasUnmanagedCallersOnlyAttribute()); //不会是unmanaged call managed function吗？还是那种情况会有stub做转换？
 
     PCODE pbRetVal = NULL;
 
