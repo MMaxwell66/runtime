@@ -94,6 +94,7 @@
 #define PER_HEAP_METHOD static
 #endif // MULTIPLE_HEAPS
 
+// 这个 "per" 让我感觉有点困惑，但根据上面的comment这个 PER_HEAP_ISOLATED 就是指 global fields
 #define PER_HEAP_ISOLATED_FIELD static
 #define PER_HEAP_ISOLATED_METHOD static
 #define PER_HEAP_ISOLATED_FIELD_MAINTAINED static
@@ -476,7 +477,7 @@ enum gc_pause_mode
     pause_low_latency = 2,     //short pauses are essential
     //avoid long pauses from blocking full GCs unless running out of memory
     pause_sustained_low_latency = 3,
-    pause_no_gc = 4
+    pause_no_gc = 4 // set only by managed GC.TryStartNoGCRegion
 };
 
 enum gc_loh_compaction_mode
@@ -630,7 +631,7 @@ class gc_mechanisms
 {
 public:
     VOLATILE(size_t) gc_index; // starts from 1 for the first GC, like dd_collection_count
-    int condemned_generation;
+    int condemned_generation; // 可能值有：max_generation(2)
     BOOL promotion;
     BOOL compaction;
     BOOL loh_compaction;
@@ -983,7 +984,7 @@ public:
     // If we rearrange regions between heaps, we need to make sure this is updated accordingly.
     PTR_heap_segment start_segment;     // 由 heap_segment->next 组成单链表
 #ifndef USE_REGIONS
-    uint8_t*        allocation_start;
+    uint8_t*        allocation_start; // TODO: 看看这个对于 gen0/1/2 的区别
 #endif //!USE_REGIONS
 
     // For all the condemned generations, this is re-inited at the beginning of the plan phase. For the other
@@ -1141,7 +1142,7 @@ public:
     //total object size after a GC, ie, doesn't include fragmentation
     size_t    current_size;
     size_t    collection_count;
-    size_t    promoted_size;
+    size_t    promoted_size;                // 一个使用是用于计算 GetGCMemoryInfo // Q: BGC会修改这个值吗？还是说应该是SINGLE_GC_ALLOC所以只有在pause阶段BGC才会动这里的数据？
     size_t    freach_previous_promotion;
 
     // Updated in each GC. For a generation that's not condemned during that GC, its free list could be used so
@@ -1368,9 +1369,9 @@ struct snoop_stats_data
 };
 #endif //SNOOP_STATS
 
-struct no_gc_region_info
+struct no_gc_region_info // 在 prepare_for_no_gc_region 中处理用户输入
 {
-    size_t soh_allocation_size;
+    size_t soh_allocation_size; // 从用户输入计算得到
     size_t loh_allocation_size;
     size_t started;
     size_t num_gcs;
@@ -1379,7 +1380,7 @@ struct no_gc_region_info
     gc_pause_mode saved_pause_mode;
     size_t saved_gen0_min_size;
     size_t saved_gen3_min_size;
-    BOOL minimal_gc_p;
+    BOOL minimal_gc_p; // TryStartNoGCRegion's disallowFullBlockingGC
     size_t soh_withheld_budget;
     size_t loh_withheld_budget;
     NoGCRegionCallbackFinalizerWorkItem* callback;
@@ -3849,7 +3850,7 @@ private:
 
     PER_HEAP_FIELD_ALLOC GCSpinLock more_space_lock_uoh;
 
-    PER_HEAP_FIELD_ALLOC size_t soh_allocation_no_gc;
+    PER_HEAP_FIELD_ALLOC size_t soh_allocation_no_gc; // 从 TryStartNoGCRegion 的输入计算得到
     PER_HEAP_FIELD_ALLOC size_t loh_allocation_no_gc;
 
 #ifdef MULTIPLE_HEAPS
@@ -3916,7 +3917,7 @@ private:
 
     // Only used for dprintf
     PER_HEAP_FIELD_DIAG_ONLY uint64_t time_bgc_last;
-
+    // init@init_records
     PER_HEAP_FIELD_DIAG_ONLY gc_history_per_heap gc_data_per_heap;
 
     // TODO! This is not updated for regions and should be!
@@ -4098,15 +4099,16 @@ private:
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool mark_list_overflow;
 
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL proceed_with_gc_p;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL proceed_with_gc_p; // false due to no GC region
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool maxgen_size_inc_p;
 
+    // gc reason: reason_lowmemory reason || reason_lowmemory_blocking || gc_heap::latency_level == latency_level_memory_footprint
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL g_low_memory_status;
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(bool) internal_gc_done;
 
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC gc_mechanisms settings;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC gc_mechanisms settings; // init@init_mechanisms
 
 #ifdef MULTIPLE_HEAPS
     // These 2 fields' values do not change but are set/unset per GC
@@ -4561,6 +4563,7 @@ private:
     // to return the last BGC info otherwise if we only did BGCs we could frequently
     // return nothing). So we maintain 2 of these for BGC and the older one is
     // guaranteed to be consistent.
+    // Q: 如果在读到一般的时候上一个BGC结束，下一个BGC开始了是不是有可能出现错误信息？虽然感觉这个时间窗口很小
     PER_HEAP_ISOLATED_FIELD_DIAG_ONLY last_recorded_gc_info last_bgc_info[2];
     // This is either 0 or 1.
     PER_HEAP_ISOLATED_FIELD_DIAG_ONLY VOLATILE(int) last_bgc_info_index;
@@ -4938,7 +4941,7 @@ uint64_t& dd_time_clock_interval (dynamic_data* inst)
 }
 
 inline
-size_t& dd_gc_elapsed_time (dynamic_data* inst)
+size_t& dd_gc_elapsed_time (dynamic_data* inst) // μs
 {
     return inst->gc_elapsed_time;
 }
@@ -5171,7 +5174,7 @@ struct gap_reloc_pair
 // '<' 也就是说最大的obj size是 0x28，应该是保证MT不被overwrite掉
 #define min_pre_pin_obj_size (sizeof (gap_reloc_pair) + min_obj_size)
 
-struct DECLSPEC_ALIGN(8) aligned_plug_and_gap
+struct DECLSPEC_ALIGN(8) aligned_plug_and_gap // 40B
 {
     size_t       additional_pad;
     plug_and_gap plugandgap;    // 这里的pair之后有有一个align导致的gap

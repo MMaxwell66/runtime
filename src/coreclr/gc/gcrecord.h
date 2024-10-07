@@ -176,7 +176,7 @@ public:
 // a struct in an ETW event.
 struct gc_generation_data
 {
-    // data recorded at the beginning of a GC
+    // data recorded at the beginning of a GC @init_records
     size_t size_before; // including fragmentation.
     size_t free_list_space_before;
     size_t free_obj_space_before;

@@ -4,6 +4,11 @@
 /*
 不同define的TOREAD:
 DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DOUBLY_LINKED_FL
+
+additional defined, AMD64, windows:
+FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP, FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+not defined:
+JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF
 */
 
 //
@@ -2462,6 +2467,7 @@ int         gc_heap::generation_skip_ratio_threshold = 0;
 int         gc_heap::conserve_mem_setting = 0;
 bool        gc_heap::spin_count_unit_config_p = false;
 
+// 这下面的9个field是用于实现`GC.GetGCMemoryInfo`
 uint64_t    gc_heap::suspended_start_time = 0;
 uint64_t    gc_heap::end_gc_time = 0;
 uint64_t    gc_heap::total_suspended_time = 0;
@@ -2494,7 +2500,7 @@ uint32_t    gc_heap::m_high_memory_load_th;
 
 uint32_t    gc_heap::v_high_memory_load_th;
 
-bool        gc_heap::is_restricted_physical_mem;
+bool        gc_heap::is_restricted_physical_mem; // WINDOWS: is job limit mem?, UNIX: cgroup restrict mem? (physicall or address space)
 
 uint64_t    gc_heap::total_physical_mem = 0;
 
@@ -3067,7 +3073,7 @@ size_t     gc_heap::smoothed_desired_total[total_generation_count];
 
 // This is for methods that need to iterate through all SOH heap segments/regions.
 inline
-int get_start_generation_index()
+int get_start_generation_index() // 这个应该是因为segment下面gen0/gen1和第一个gen2处于同一个segment
 {
 #ifdef USE_REGIONS
     return 0;
@@ -7191,7 +7197,7 @@ void gc_heap::gc_thread_function ()
 
             if ((gc_heap::dynamic_adaptation_mode == dynamic_adaptation_to_application_sizes) &&
                 (dynamic_heap_count_data.new_n_heaps != n_heaps))
-            {
+            {   // 你可能会对上面几行的assert疑惑，不是已经asset相等了吗？这里是这样的: check_heap_count 里面也会 Set gc_start_event, 在那里会去让其他thread进入正确的等待状态，然后上面会去等待idle thread count到正确的值。所以这里对应的不是GC的步骤，而是check_heap_count的步骤。
                 // The reason why we need to do this is -
                 // + for threads that were participating, we need them to do work for change_heap_count
                 // + for threads that were not participating but will need to participate, we need to make sure they are woken now instead of
@@ -7265,26 +7271,10 @@ void gc_heap::gc_thread_function ()
 #endif //BACKGROUND_GC
 
 #ifdef MULTIPLE_HEAPS
-#ifdef STRESS_DYNAMIC_HEAP_COUNT
-            dynamic_heap_count_data.lowest_heap_with_msl_uoh = -1;
-#endif //STRESS_DYNAMIC_HEAP_COUNT
             for (int i = 0; i < gc_heap::n_heaps; i++)
             {
                 gc_heap* hp = gc_heap::g_heaps[i];
                 leave_spin_lock(&hp->more_space_lock_soh);
-
-#ifdef STRESS_DYNAMIC_HEAP_COUNT
-                if ((dynamic_heap_count_data.lowest_heap_with_msl_uoh == -1) && (hp->uoh_msl_before_gc_p))
-                {
-                    dynamic_heap_count_data.lowest_heap_with_msl_uoh = i;
-                }
-
-                if (hp->uoh_msl_before_gc_p)
-                {
-                    dprintf (5555, ("h%d uoh msl was taken before GC", i));
-                    hp->uoh_msl_before_gc_p = false;
-                }
-#endif //STRESS_DYNAMIC_HEAP_COUNT
             }
 #endif //MULTIPLE_HEAPS
 
@@ -23194,7 +23184,7 @@ start_no_gc_region_status gc_heap::prepare_for_no_gc_region (uint64_t total_size
 
     int num_heaps = get_num_heaps();
 
-    uint64_t total_allowed_soh_allocation = (uint64_t)max_soh_allocated * num_heaps;
+    uint64_t total_allowed_soh_allocation = (uint64_t)max_soh_allocated * num_heaps; // bug when region? 但是影响不大，还是很接近max value.
     // [LOCALGC TODO]
     // In theory, the upper limit here is the physical memory of the machine, not
     // SIZE_T_MAX. This is not true today because total_physical_mem can be
@@ -24101,19 +24091,6 @@ void gc_heap::garbage_collect (int n)
 #endif //FEATURE_BASICFREEZE
 
 #ifdef MULTIPLE_HEAPS
-#ifdef STRESS_DYNAMIC_HEAP_COUNT
-        dprintf (9999, ("%d heaps, join sees %d, actually joined %d, %d idle threads (%d)",
-            n_heaps, gc_t_join.get_num_threads (), heaps_in_this_gc,
-            VolatileLoadWithoutBarrier(&dynamic_heap_count_data.idle_thread_count), (n_max_heaps - n_heaps)));
-        if (heaps_in_this_gc != n_heaps)
-        {
-            dprintf (9999, ("should have %d heaps but actually have %d!!", n_heaps, heaps_in_this_gc));
-            GCToOSInterface::DebugBreak ();
-        }
-
-        heaps_in_this_gc = 0;
-#endif //STRESS_DYNAMIC_HEAP_COUNT
-
         for (int i = 0; i < n_heaps; i++)
         {
             gc_heap* hp = g_heaps[i];
@@ -49942,7 +49919,7 @@ void gc_heap::add_bgc_pause_duration_0()
         last_gc_info->pause_durations[0] = pause_duration;
         if (last_gc_info->index < last_ephemeral_gc_info.index)
         {
-            last_gc_info->pause_durations[0] -= last_ephemeral_gc_info.pause_durations[0];
+            last_gc_info->pause_durations[0] -= last_ephemeral_gc_info.pause_durations[0]; // 从调用来看，这个是在第一次pause的时候的数字，那么有可能中间插进来一个ephemeral GC吗？
         }
 
         total_suspended_time += last_gc_info->pause_durations[0];
@@ -50629,7 +50606,7 @@ GCHeap::GarbageCollectGeneration (unsigned int gen, gc_reason reason)
 
     //don't trigger another GC if one was already in progress
     //while waiting for the lock
-    {
+    { // 会不会出现在准备触发一个高gen的GC的时候被一个低gen的抢先了？导致连续出现一个低gen+高gen的情况？
         size_t col_count = dd_collection_count (dd);
 
         if (localCount != col_count)
