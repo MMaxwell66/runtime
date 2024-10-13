@@ -2564,7 +2564,7 @@ VOLATILE(BOOL) gc_heap::gc_background_running = FALSE;
 
 #ifdef USE_REGIONS
 #ifdef MULTIPLE_HEAPS
-uint8_t*    gc_heap::gc_low; // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1
+uint8_t*    gc_heap::gc_low; // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1。对于segment是整个GC范围或者当前gen开始到ephemeral reserved
 uint8_t*    gc_heap::gc_high;
 #endif //MULTIPLE_HEAPS
 VOLATILE(uint8_t*)    gc_heap::ephemeral_low;
@@ -22362,7 +22362,7 @@ void gc_heap::gc1()
 
     free_list_info (max_generation, "beginning");
 
-    vm_heap->GcCondemnedGeneration = settings.condemned_generation;
+    vm_heap->GcCondemnedGeneration = settings.condemned_generation; // 这里之前的值是初始的gen，然后更新成decided的gen
 
     assert (g_gc_card_table == card_table);
 
@@ -37441,7 +37441,7 @@ void gc_heap::recover_bgc_settings()
     {
         dprintf (2, ("restoring bgc settings"));
         settings = saved_bgc_settings;
-        GCHeap::GcCondemnedGeneration = gc_heap::settings.condemned_generation;
+        GCHeap::GcCondemnedGeneration = gc_heap::settings.condemned_generation; // 这个不是 < 2 为什么要recover 这个？
     }
 }
 

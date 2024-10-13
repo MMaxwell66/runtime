@@ -234,6 +234,9 @@ public:	// FIX
     PER_HEAP_ISOLATED
         VOLATILE(BOOL)          GcInProgress;       // used for syncing w/GC
     PER_HEAP_ISOLATED   VOLATILE(unsigned) GcCount;
+    // 这个似乎主要用于 SVR, 在user thread, 这个初始化为一开始的gen,
+    // 然后 server thread 共同决定最终的gen之后，=> settings => here (@top@gc1)，也就是说会在gc1的时候更新成最终确定的gen
+    // 另外似乎 FGC 会recover 这个，具体使用待看
     PER_HEAP_ISOLATED   unsigned GcCondemnedGeneration;
     // calculated at the end of a GC.
     PER_HEAP_ISOLATED   size_t  totalSurvivedSize;

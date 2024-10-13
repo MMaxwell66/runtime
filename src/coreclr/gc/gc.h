@@ -69,6 +69,11 @@ enum gc_reason
     reason_lowmemory_blocking = 9,
     reason_induced_compacting = 10,
     reason_lowmemory_host = 11,
+
+    // https://devblogs.microsoft.com/dotnet/provisional-mode/
+    // 大概就是说：当gen2有一推pinned obj导致gen2有很多free space但是compact gen2 GC又无效的时候（高内存下会使用compact gen2 GC）
+    // 这个时候GC会切换到 pm mode, 通过使用更多的 gen1 promote GC，使得 gen2 free space 多用一点
+    // 当gen2 free space满的时候就会trigger reason_pm_full_gc, 进行gen2的compact
     reason_pm_full_gc = 12, // provisional mode requested to trigger full GC
     reason_lowmemory_host_blocking = 13,
     reason_bgc_tuning_soh = 14,

@@ -48,7 +48,7 @@ void GCHeap::UpdatePreGCCounters()
 #ifdef BACKGROUND_GC
     else if (depth < max_generation && pSettings->background_p)
     {
-        type = gc_etw_type_fgc;
+        type = gc_etw_type_fgc; // BGC过程中的blocking GC
     }
 #endif // BACKGROUND_GC
 

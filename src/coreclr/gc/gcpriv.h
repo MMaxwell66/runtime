@@ -636,7 +636,7 @@ public:
     BOOL compaction;
     BOOL loh_compaction;
     BOOL heap_expansion;
-    uint32_t concurrent;
+    uint32_t concurrent; // this GC is BGC
     BOOL demotion;
     BOOL card_bundles;
     int  gen0_reduction_count;
@@ -649,7 +649,7 @@ public:
     BOOL found_finalizers;
 
 #ifdef BACKGROUND_GC
-    BOOL background_p;
+    BOOL background_p; // is BGC running during this GC
     bgc_state b_state;
 #endif //BACKGROUND_GC
 
@@ -1141,7 +1141,7 @@ public:
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
     //total object size after a GC, ie, doesn't include fragmentation
     size_t    current_size;
-    size_t    collection_count;
+    size_t    collection_count; // 当前gen的GC index, 有可能小于younger gen, update@update_collection_counts(top@gc1)
     size_t    promoted_size;                // 一个使用是用于计算 GetGCMemoryInfo // Q: BGC会修改这个值吗？还是说应该是SINGLE_GC_ALLOC所以只有在pause阶段BGC才会动这里的数据？
     size_t    freach_previous_promotion;
 
@@ -1151,9 +1151,9 @@ public:
 
     //
     // The following 3 fields are updated at the beginning of each GC, if that GC condemns this generation.
-    //
-    size_t    gc_clock; // the gc index
-    uint64_t  time_clock; // time when this gc started
+    // update@update_collection_counts(top@gc1)
+    size_t    gc_clock; // the gc index // 只有condemned gen会更新，绝对GC index
+    uint64_t  time_clock; // time when this gc started // HP timestamp
     uint64_t  previous_time_clock; // time when previous gc started
 
     // Updated at the end of a GC, if that GC condemns this generation.
