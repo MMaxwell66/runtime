@@ -632,11 +632,11 @@ class gc_mechanisms
 public:
     VOLATILE(size_t) gc_index; // starts from 1 for the first GC, like dd_collection_count
     int condemned_generation; // 可能值有：max_generation(2)
-    BOOL promotion;
+    BOOL promotion; // case1: settings.condemned_generation > 1
     BOOL compaction;
     BOOL loh_compaction;
     BOOL heap_expansion;
-    uint32_t concurrent; // this GC is BGC
+    uint32_t concurrent; // this GC is BGC // decide after joined_generation_to_condemn
     BOOL demotion;
     BOOL card_bundles;
     int  gen0_reduction_count;
@@ -649,7 +649,7 @@ public:
     BOOL found_finalizers;
 
 #ifdef BACKGROUND_GC
-    BOOL background_p; // is BGC running during this GC
+    BOOL background_p; // is BGC running during this blocking GC
     bgc_state b_state;
 #endif //BACKGROUND_GC
 
@@ -3436,6 +3436,8 @@ private:
 
     PER_HEAP_FIELD_SINGLE_GC uint8_t* oldest_pinned_plug;
 
+// reset every GC @top@mark_phase
+// mark_list <= mark_list_index <= mark_list_end
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list;
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list_end;
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list_index;
@@ -3610,6 +3612,7 @@ private:
     PER_HEAP_FIELD_SINGLE_GC size_t* survived_per_region;
     PER_HEAP_FIELD_SINGLE_GC size_t* old_card_survived_per_region;
 
+// reset @top@mark_phase
     PER_HEAP_FIELD_SINGLE_GC bool special_sweep_p;
 
 #else //USE_REGIONS
@@ -3633,6 +3636,7 @@ private:
 #endif //USE_REGIONS
 
 #ifdef FEATURE_CARD_MARKING_STEALING
+// reset @top@mark_phase
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(uint32_t)    card_mark_chunk_index_soh;
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(bool)        card_mark_done_soh;
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(uint32_t)    card_mark_chunk_index_loh;
@@ -3727,6 +3731,7 @@ private:
     // maintained is just the # of elements in mark_stack_array.
     // The content of mark_stack_array is only maintained during a single GC.
     PER_HEAP_FIELD_MAINTAINED size_t mark_stack_array_length;
+    // init first 1024B to 0 @top@mark_phase
     PER_HEAP_FIELD_MAINTAINED mark* mark_stack_array;
 
     // This one is unusual, it's calculated in one GC and used in the next GC. so it's maintained
@@ -4101,7 +4106,7 @@ private:
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL proceed_with_gc_p; // false due to no GC region
 
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool maxgen_size_inc_p;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool maxgen_size_inc_p; // reset to false @top@mark_phase
 
     // gc reason: reason_lowmemory reason || reason_lowmemory_blocking || gc_heap::latency_level == latency_level_memory_footprint
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL g_low_memory_status;
@@ -4112,7 +4117,7 @@ private:
 
 #ifdef MULTIPLE_HEAPS
     // These 2 fields' values do not change but are set/unset per GC
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC GCEvent gc_start_event;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC GCEvent gc_start_event; // 这个除了用于sync GC start, 还被用来同步 dynamic heap count change event
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC GCEvent ee_suspend_event;
 
     // Also updated on the heap#0 GC thread because that's where we are actually doing the decommit.
@@ -4122,7 +4127,7 @@ private:
 #endif //MH_SC_MARK
 
 #if !defined(USE_REGIONS) || defined(_DEBUG)
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_promoted;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_promoted; // init@top@mark_phase
 #endif //!USE_REGIONS || _DEBUG
 #ifdef BACKGROUND_GC
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_bpromoted;
@@ -4175,6 +4180,7 @@ private:
 
 #ifdef USE_REGIONS
     // Initialized in a blocking GC at the beginning of the mark phase
+    // init_value=get_used_region_count 所有 region （包括free list）
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t region_count;
 
     // Highest and lowest address for ephemeral generations.
@@ -4188,6 +4194,8 @@ private:
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(uint8_t*)  ephemeral_high;
 
     // For segments these are per heap fields // 似乎被is_in_condemned_gc代替了
+    // [segment] init@top@gc1
+    // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1。对于segment是整个GC范围或者当前gen开始到ephemeral reserved
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_low; // low end of the lowest region being condemned
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_high; // high end of the highest region being condemned
 #endif //USE_REGIONS
@@ -4588,6 +4596,7 @@ private:
     // join.
     enum etw_gc_time_info
     {
+        // reset to 0 @top@mark_phase
         time_mark_sizedref = 0,
         // Note time_mark_roots does not include scanning sizedref handles.
         time_mark_roots = 1,
@@ -4794,12 +4803,16 @@ class CFinalizeStaticAsserts {
 };
 #endif // FEATURE_PREMORTEM_FINALIZATION
 
-inline // begin@make phase =generation_size-dd_fragmentation
+
+
+inline // init@top@mark_phase = generation_size - dd_fragmentation - [get_generation_start_size if segment else 0]
  size_t& dd_begin_data_size (dynamic_data* inst)
 {
   return inst->begin_data_size;
 }
-inline // 1. plan phase, += plug_size
+// reset@top@mark_phase: 0
+// 1. plan phase, += plug_size
+inline
  size_t& dd_survived_size (dynamic_data* inst)
 {
   return inst->survived_size;
@@ -4811,28 +4824,35 @@ inline
   return inst->num_npinned_plugs;
 }
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
+// reset@top@mark_phase: 0
 inline
 size_t& dd_pinned_survived_size (dynamic_data* inst)
 {
   return inst->pinned_survived_size;
 }
+// reset@top@mark_phase: 0
 inline
 size_t& dd_added_pinned_size (dynamic_data* inst)
 {
   return inst->added_pinned_size;
 }
+// reset@top@mark_phase: 0
 inline
 size_t& dd_artificial_pinned_survived_size (dynamic_data* inst)
 {
   return inst->artificial_pinned_survived_size;
 }
 #ifdef SHORT_PLUGS
+// reset@top@mark_phase: 0
 inline
 size_t& dd_padding_size (dynamic_data* inst)
 {
   return inst->padding_size;
 }
 #endif //SHORT_PLUGS
+
+
+
 inline
  size_t& dd_current_size (dynamic_data* inst)
 {

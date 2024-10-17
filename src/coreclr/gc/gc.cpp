@@ -8,7 +8,7 @@ DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DO
 additional defined, AMD64, windows:
 FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP, FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
 not defined:
-JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF
+JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF, FEATURE_STRUCTALIGN, SNOOP_STATS
 */
 
 //
@@ -2335,13 +2335,17 @@ void* virtual_alloc (size_t size, bool use_large_pages_p, uint16_t numa_node = N
 uint32_t*   gc_heap::mark_array;
 #endif //BACKGROUND_GC && !MULTIPLE_HEAPS
 
-uint8_t**   gc_heap::g_mark_list; // init@init_semi_shared
+// init@init_semi_shared
+// grow@grow_mark_list
+uint8_t**   gc_heap::g_mark_list;
+size_t      gc_heap::g_mark_list_total_size;
 uint8_t**   gc_heap::g_mark_list_copy;
 size_t      gc_heap::mark_list_size;
-size_t      gc_heap::g_mark_list_total_size;
 bool        gc_heap::mark_list_overflow;
 #ifdef USE_REGIONS
-uint8_t***  gc_heap::g_mark_list_piece; // @grow_mark_list_piece
+// these 3 init to 0?
+// grow@grow_mark_list_piece
+uint8_t***  gc_heap::g_mark_list_piece;
 size_t      gc_heap::g_mark_list_piece_size;
 size_t      gc_heap::g_mark_list_piece_total_size;  // 基本上等于 g_mark_list_piece_size * 2 * n_heaps 除非 heap size 变化导致 piece_size 变大
 #endif //USE_REGIONS
@@ -2564,7 +2568,7 @@ VOLATILE(BOOL) gc_heap::gc_background_running = FALSE;
 
 #ifdef USE_REGIONS
 #ifdef MULTIPLE_HEAPS
-uint8_t*    gc_heap::gc_low; // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1。对于segment是整个GC范围或者当前gen开始到ephemeral reserved
+uint8_t*    gc_heap::gc_low;
 uint8_t*    gc_heap::gc_high;
 #endif //MULTIPLE_HEAPS
 VOLATILE(uint8_t*)    gc_heap::ephemeral_low;
@@ -2833,8 +2837,8 @@ uint8_t*    gc_heap::min_overflow_address = MAX_PTR;
 
 uint8_t*    gc_heap::max_overflow_address = 0;
 
+// reset_per_gc@top@mark_phase
 uint8_t*    gc_heap::shigh = 0;
-
 uint8_t*    gc_heap::slow = MAX_PTR;
 
 #ifndef USE_REGIONS
@@ -8436,6 +8440,7 @@ bool gc_heap::should_check_brick_for_reloc (uint8_t* o)
 #endif //USE_REGIONS
 
 #ifdef MH_SC_MARK
+// set to 1 @top@mark_phase
 inline
 int& gc_heap::mark_stack_busy()
 {
@@ -24173,7 +24178,7 @@ void gc_heap::garbage_collect (int n)
 
         settings.gc_index = (uint32_t)dd_collection_count (dynamic_data_of (0)) + 1;
 
-#ifdef MULTIPLE_HEAPS
+#if defined(MULTIPLE_HEAPS) && defined(HEAP_BALANCE_INSTRUMENTATION)
         hb_log_balance_activities();
         hb_log_new_allocation();
 #endif //MULTIPLE_HEAPS
@@ -29242,53 +29247,16 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
     }
 #endif //MH_SC_MARK
 
-    static uint32_t num_sizedrefs = 0;
+    static uint32_t num_sizedrefs = 0; // removed in .NET 9 except in standalone build for compatibility
 
 #ifdef MH_SC_MARK
+    // if full GC && get_total_heap_size() > 100MiB
     static BOOL do_mark_steal_p = FALSE;
 #endif //MH_SC_MARK
 
 #ifdef FEATURE_CARD_MARKING_STEALING
     reset_card_marking_enumerators();
 #endif // FEATURE_CARD_MARKING_STEALING
-
-#ifdef STRESS_REGIONS
-    heap_segment* gen0_region = generation_start_segment (generation_of (0));
-    while (gen0_region)
-    {
-        size_t gen0_region_size = heap_segment_allocated (gen0_region) - heap_segment_mem (gen0_region);
-
-        if (gen0_region_size > 0)
-        {
-            if ((num_gen0_regions % pinning_seg_interval) == 0)
-            {
-                dprintf (REGIONS_LOG, ("h%d potentially creating pinning in region %zx",
-                    heap_number, heap_segment_mem (gen0_region)));
-
-                int align_const = get_alignment_constant (TRUE);
-                // Pinning the first and the middle object in the region.
-                uint8_t* boundary = heap_segment_mem (gen0_region);
-                uint8_t* obj_to_pin = boundary;
-                int num_pinned_objs = 0;
-                while (obj_to_pin < heap_segment_allocated (gen0_region))
-                {
-                    if (obj_to_pin >= boundary && !((CObjectHeader*)obj_to_pin)->IsFree())
-                    {
-                        pin_by_gc (obj_to_pin);
-                        num_pinned_objs++;
-                        if (num_pinned_objs >= 2)
-                            break;
-                        boundary += (gen0_region_size / 2) + 1;
-                    }
-                    obj_to_pin += Align (size (obj_to_pin), align_const);
-                }
-            }
-        }
-
-        num_gen0_regions++;
-        gen0_region = heap_segment_next (gen0_region);
-    }
-#endif //STRESS_REGIONS
 
 #ifdef FEATURE_EVENT_TRACE
     static uint64_t current_mark_time = 0;
@@ -29313,7 +29281,9 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
         compute_gc_and_ephemeral_range (condemned_gen_number, false);
 #endif //USE_REGIONS
 
+        // no-op unless on Apple (object-C marshal)
         GCToEEInterface::BeforeGcScanRoots(condemned_gen_number, /* is_bgc */ false, /* is_concurrent */ false);
+        // just AppDomain->m_dwSizedRefHandles
         num_sizedrefs = GCToEEInterface::GetTotalNumSizedRefHandles();
 
 #ifdef FEATURE_EVENT_TRACE
@@ -49958,35 +49928,6 @@ void gc_heap::do_pre_gc()
         last_bgc_info[last_bgc_info_index].index = settings.gc_index;
     }
 #endif //BACKGROUND_GC
-
-#ifdef TRACE_GC
-    size_t total_allocated_since_last_gc = get_total_allocated_since_last_gc();
-#ifdef BACKGROUND_GC
-    dprintf (1, (ThreadStressLog::gcDetailedStartMsg(),
-        VolatileLoad(&settings.gc_index),
-        dd_collection_count (hp->dynamic_data_of (0)),
-        settings.condemned_generation,
-        total_allocated_since_last_gc,
-        (settings.concurrent ? "BGC" : (gc_heap::background_running_p() ? "FGC" : "NGC")),
-        settings.b_state));
-#else
-    dprintf (1, ("*GC* %d(gen0:%d)(%d)(alloc: %zd)",
-        VolatileLoad(&settings.gc_index),
-        dd_collection_count(hp->dynamic_data_of(0)),
-        settings.condemned_generation,
-        total_allocated_since_last_gc));
-#endif //BACKGROUND_GC
-
-    if (heap_hard_limit)
-    {
-        size_t total_heap_committed = get_total_committed_size();
-        size_t total_heap_committed_recorded = current_total_committed - current_total_committed_bookkeeping;
-        dprintf (1, ("(%d)GC commit BEG #%zd: %zd (recorded: %zd = %zd-%zd)",
-            settings.condemned_generation,
-            (size_t)settings.gc_index, total_heap_committed, total_heap_committed_recorded,
-            current_total_committed, current_total_committed_bookkeeping));
-    }
-#endif //TRACE_GC
 
     GCHeap::UpdatePreGCCounters();
     fire_committed_usage_event();
