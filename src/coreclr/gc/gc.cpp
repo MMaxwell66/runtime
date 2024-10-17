@@ -2454,7 +2454,7 @@ size_t      gc_heap::gen0_max_budget_from_config = 0;
 
 int         gc_heap::high_mem_percent_from_config = 0;
 
-bool        gc_heap::use_frozen_segments_p = false;
+bool        gc_heap::use_frozen_segments_p = false; // 是否有 readonly segment 被创建过？
 
 #ifdef FEATURE_LOH_COMPACTION
 gc_heap::etw_loh_compact_info* gc_heap::loh_compact_info;
@@ -10051,6 +10051,7 @@ void gc_heap::copy_brick_card_table()
 }
 
 #ifdef FEATURE_BASICFREEZE
+// 介绍：https://devblogs.microsoft.com/dotnet/performance-improvements-in-net-8/#non-gc-heap
 // Note that we always insert at the head of the max_generation segment list.
 BOOL gc_heap::insert_ro_segment (heap_segment* seg)
 {
@@ -10091,6 +10092,7 @@ BOOL gc_heap::insert_ro_segment (heap_segment* seg)
 
     seg_mapping_table_add_ro_segment (seg);
 
+    // For regions ro segments are always out of range.
     if ((heap_segment_reserved (seg) > lowest_address) &&
         (heap_segment_mem (seg) < highest_address))
     {
@@ -10111,7 +10113,7 @@ void gc_heap::update_ro_segment (heap_segment* seg, uint8_t* allocated, uint8_t*
     assert (heap_segment_read_only_p (seg));
     assert (allocated <= committed);
     assert (committed <= heap_segment_reserved (seg));
-    heap_segment_allocated (seg) = allocated;
+    heap_segment_allocated (seg) = allocated; // 这里没有更新used, 估计是used其实没有被用到吧。
     heap_segment_committed (seg) = committed;
 
     leave_spin_lock (&gc_heap::gc_lock);
@@ -29400,7 +29402,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
         if (ro_segments_in_range)
         {
             dprintf(3,("Marking in range ro segments"));
-            mark_ro_segments();
+            mark_ro_segments(); // ro 不是 pin 加上 always live 而且不包括 obj ref 吗？为什么要mark? A: 见 https://github.com/dotnet/runtime/pull/76251 的讨论，基本上是说GC目前还没能做到non-gc预设的那么完美。比如涉及到handle的一些。
             // Should fire an ETW event here.
         }
 #endif //USE_REGIONS

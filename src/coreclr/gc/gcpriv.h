@@ -982,7 +982,9 @@ public:
     // so now they are part of gen2.
     //
     // If we rearrange regions between heaps, we need to make sure this is updated accordingly.
-    PTR_heap_segment start_segment;     // 由 heap_segment->next 组成单链表
+    // 由 heap_segment->next 组成单链表
+    // heap0 gen2 的开头有可能是 readonly segment, readonly segment也只会链接到这个地方
+    PTR_heap_segment start_segment;
 #ifndef USE_REGIONS
     uint8_t*        allocation_start; // TODO: 看看这个对于 gen0/1/2 的区别
 #endif //!USE_REGIONS
@@ -1007,6 +1009,7 @@ public:
     heap_segment*   plan_start_segment;
     // As mentioned above, only max_generation could have ro regions, and only on heap#0; for other generations
     // this will always be 0.
+    // heap0 gen2 list 前半段的 readonly segment 中的最后一个
     heap_segment*   tail_ro_region;
 #endif //USE_REGIONS
 
@@ -5591,6 +5594,7 @@ uint8_t*& heap_segment_used (heap_segment* inst)
 {
   return inst->used;
 }
+// 根据 https://github.com/dotnet/runtime/pull/76586 的说法，这个指向的是下一个obj的mt, 也就是上一个obj end 的 sizeof(ObjHeader) 之后。
 inline
 uint8_t*& heap_segment_allocated (heap_segment* inst)
 {
@@ -5684,6 +5688,7 @@ PTR_heap_segment & heap_segment_next (heap_segment* inst)
 {
   return inst->next;
 }
+// 指向 mt, header之后
 inline
 uint8_t*& heap_segment_mem (heap_segment* inst)
 {
