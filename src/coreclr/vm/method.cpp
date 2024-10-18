@@ -2096,7 +2096,7 @@ PCODE MethodDesc::GetCallTarget(OBJECTREF* pThisObj, TypeHandle ownerType)
     }
     else
     {
-        pTarget = GetSingleCallableAddrOfCode();
+        pTarget = GetSingleCallableAddrOfCode(); // dereference from MD or MT slot table
     }
 
     return pTarget;

@@ -1306,7 +1306,7 @@ public:
     // recursive disables.
     Volatile<ULONG>      m_fPreemptiveGCDisabled;
 
-    PTR_Frame            m_pFrame;  // The Current Frame
+    PTR_Frame            m_pFrame;  // The Current Frame, top is -1
 
     //-----------------------------------------------------------
     // If the thread has wandered in from the outside this is

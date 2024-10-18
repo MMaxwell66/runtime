@@ -5,7 +5,9 @@
 ** File:    callhelpers.h
 ** Purpose: Provides helpers for making managed calls
 **
-
+1. call m_pMD->GetCallTarget or __pObjMT->GetRestoredSlot(slotNumber) 等获取 func ptr
+2. 调用 CallDescrWorkerInternal defined in CallDescrWorkerAMD64.asm， 包括 MethodDescCallSite 和 DispatchCallSimple 最终都是调用这个去call上面得到的func ptr
+3. 除上之外主要就是参数传递（register之类的），返回值处理（xmm之类的）
 ===========================================================*/
 #ifndef __CALLHELPERS_H__
 #define __CALLHELPERS_H__
@@ -24,7 +26,7 @@ struct CallDescrData
     const FloatArgumentRegisters * pFloatArgumentRegisters;
 #endif
 #ifdef CALLDESCR_REGTYPEMAP
-    UINT64                      dwRegTypeMap;
+    UINT64                      dwRegTypeMap; // 前四个args，每个一个byte只是cor type
 #endif
     UINT32                      fpReturnSize;
     PCODE                       pTarget;
@@ -53,7 +55,7 @@ struct CallDescrData
 #define NUMBER_RETURNVALUE_SLOTS (ENREGISTERED_RETURNTYPE_MAXSIZE / sizeof(ARG_SLOT))
 
 #if !defined(DACCESS_COMPILE)
-
+// defined in CallDescrWorkerAMD64.asm
 extern "C" void STDCALL CallDescrWorkerInternal(CallDescrData * pCallDescrData);
 
 #if !defined(HOST_64BIT) && defined(_DEBUG)
