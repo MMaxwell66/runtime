@@ -26515,6 +26515,10 @@ BOOL gc_heap::background_mark (uint8_t* o, uint8_t* low, uint8_t* high)
 #define ignore_start 0
 #define use_start 1
 
+/*
+mt: 为了 GCDesc + array component size
+start: 要求扫到的pointer& >= start
+ */
 #define go_through_object(mt,o,size,parm,start,start_useful,limit,exp)      \
 {                                                                           \
     CGCDesc* map = CGCDesc::GetCGCDescFromMT((MethodTable*)(mt));           \
@@ -26956,6 +26960,7 @@ void mark_queue_t::verify_empty()
 }
 
 // TODO
+// 和 mark_object_simple的主要区别？
 void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL)
 {
     SERVER_SC_MARK_VOLATILE(uint8_t*)* mark_stack_tos = (SERVER_SC_MARK_VOLATILE(uint8_t*)*)mark_stack_array;
@@ -27553,11 +27558,11 @@ gc_heap::mark_object_simple (uint8_t** po THREAD_NUMBER_DCL)
 #endif //SNOOP_STATS
 
         o = mark_queue.queue_mark (o);
-        if (o != nullptr)
+        if (o != nullptr) // 这里有可能出现重复scan的
         {
             m_boundary (o);
             size_t s = size (o);
-            add_to_promoted_bytes (o, s, thread);   // 统计每个region的obj size总和
+            add_to_promoted_bytes (o, s, thread);   // 统计每个region的obj size总和 // [seg] 每个thread heap的mark size sumpup
             {
                 go_through_object_cl (method_table(o), o, s, poo,
                                         {
@@ -29808,11 +29813,11 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
     dprintf(2,("---- End of mark phase ----"));
 }
 
-inline
+inline // 这个函数有可能在一个object上面调用多次，而且统计存在并发访问问题，可以很简单的通过多个线程pin同一个object来repro
 void gc_heap::pin_object (uint8_t* o, uint8_t** ppObject)
 {
     dprintf (3, ("Pinning %zx->%zx", (size_t)ppObject, (size_t)o));
-    set_pinned (o);
+    set_pinned (o); // 这里的set是有可能重复set flag的
 
 #ifdef FEATURE_EVENT_TRACE
     if(EVENT_ENABLED(PinObjectAtGCTime))
@@ -29820,7 +29825,7 @@ void gc_heap::pin_object (uint8_t* o, uint8_t** ppObject)
         fire_etw_pin_object_event(o, ppObject);
     }
 #endif // FEATURE_EVENT_TRACE
-
+// 这里是object所属的heap，存在并发访问，但是没有用interlocked，所以会出现错误，只能说pin数量少的话，正常使用下可能问题不大。
     num_pinned_objects++;
 }
 
@@ -49116,7 +49121,7 @@ void GCHeap::Promote(Object** ppObject, ScanContext* sc, uint32_t flags)
 #endif //!MULTIPLE_HEAPS
 
     uint8_t* o = (uint8_t*)*ppObject;
-
+    //TODO(JJ): 想看看这个check的range有多大？比如是condemned gen range or whole GC range etc.
     if (!gc_heap::is_in_find_object_range (o))
     {
         return;
@@ -49151,7 +49156,7 @@ void GCHeap::Promote(Object** ppObject, ScanContext* sc, uint32_t flags)
         }
     }
 
-#ifdef FEATURE_CONSERVATIVE_GC
+#ifdef FEATURE_CONSERVATIVE_GC // 这些也许不是性能hot path但是如果是的话，其实可以考虑优化掉一些if check，包括下面pin_object之类的有很多访问config但是对于所有object相同的，完全可以在scan的时候提前选择不同的callback来优化掉这个check
     // For conservative GC, a value on stack may point to middle of a free object.
     // In this case, we don't need to promote the pointer.
     if (GCConfig::GetConservativeGC()
@@ -49168,7 +49173,7 @@ void GCHeap::Promote(Object** ppObject, ScanContext* sc, uint32_t flags)
 #endif //_DEBUG
 
     if (flags & GC_CALL_PINNED)
-        hp->pin_object (o, (uint8_t**) ppObject); // inc counter, set bit in object header
+        hp->pin_object (o, (uint8_t**) ppObject); // inc counter(存在并发计数问题), set bit in object header(会重复set)
 
 #ifdef STRESS_PINNING
     if ((++n_promote % 20) == 1)

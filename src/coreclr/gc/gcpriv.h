@@ -3440,7 +3440,9 @@ private:
     PER_HEAP_FIELD_SINGLE_GC uint8_t* oldest_pinned_plug;
 
 // reset every GC @top@mark_phase
-// mark_list <= mark_list_index <= mark_list_end
+// ~mark_list <= mark_list_index(next write pos) <= mark_list_end(inclusive)~
+// block gen2 时可用空间为0
+// 当溢出时，mark_list_index会继续增加
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list;
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list_end;
     PER_HEAP_FIELD_SINGLE_GC uint8_t** mark_list_index;
@@ -4076,7 +4078,7 @@ private:
     PER_HEAP_FIELD_DIAG_ONLY uint64_t total_alloc_bytes_uoh;
 
     // Used in a single GC.
-    PER_HEAP_FIELD_DIAG_ONLY size_t num_pinned_objects;
+    PER_HEAP_FIELD_DIAG_ONLY size_t num_pinned_objects; // 这个统计是非常不准的，一方面存在多线程更新但是没有interlocked inc导致少计, 另一方面会重复pin object导致多计
 
 #if defined(_DEBUG) && defined(VERIFY_HEAP)
     // Used in a single GC.
@@ -4130,7 +4132,7 @@ private:
 #endif //MH_SC_MARK
 
 #if !defined(USE_REGIONS) || defined(_DEBUG)
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_promoted; // init@top@mark_phase
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_promoted; // init@top@mark_phase // threading heap, marked object size sumup, 不是很准确，存在统计并发问题
 #endif //!USE_REGIONS || _DEBUG
 #ifdef BACKGROUND_GC
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC size_t* g_bpromoted;

@@ -364,6 +364,7 @@ class FrameBase
 public:
     FrameBase() {LIMITED_METHOD_CONTRACT; }
 
+    // 在GC的时候，会被用来scan stack root
     virtual void GcScanRoots(promote_func *fn, ScanContext* sc) {
         LIMITED_METHOD_CONTRACT;
         // Nothing to protect

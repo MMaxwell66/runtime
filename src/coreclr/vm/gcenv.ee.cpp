@@ -151,7 +151,7 @@ static void ScanStackRoots(Thread * pThread, promote_func* fn, ScanContext* sc)
             for (walk = topStack; walk < bottomStack; walk ++)
             {
                 if (((void*)*walk > (void*)bottomStack || (void*)*walk < (void*)topStack) &&
-                    ((void*)*walk >= (void*)g_lowest_address && (void*)*walk <= (void*)g_highest_address) // 感觉有后面就够了，stack不会在gc region内吧
+                    ((void*)*walk >= (void*)g_lowest_address && (void*)*walk <= (void*)g_highest_address) // 感觉有后面就够了，stack不会在gc region内吧 // 对于segment 来说是不是确实还不好说？
                     )
                 {
                     //DbgPrintf("promote " FMT_ADDR " : " FMT_ADDR "\n", walk, *walk);
@@ -288,6 +288,8 @@ void GCToEEInterface::GcScanRoots(promote_func* fn, int condemned, int max_gen, 
         }
     }
 
+    // 感觉有点类似于mark phase里的steal机制，先结束的heap会先处理这个，从来把工作量分散。
+    // 然后是依靠mark bit?来加速避免后来者再次mark?（因为没看到直接的steal逻辑）
     // In server GC, we should be competing for marking the statics
     // It's better to do this *after* stack scanning, because this way
     // we can make up for imbalances in stack scanning
