@@ -3736,7 +3736,10 @@ private:
     // maintained is just the # of elements in mark_stack_array.
     // The content of mark_stack_array is only maintained during a single GC.
     PER_HEAP_FIELD_MAINTAINED size_t mark_stack_array_length;
-    // init first 1024B to 0 @top@mark_phase
+    // purpose 1:
+    // 在gen2 GC的时候 init first 128 pointer to 0 @top@mark_phase
+    // 在mark phase的时候，会被当做 Object** 来使用，作为stack来把递归调用转化为迭代调用，并且有一些对高出度的object的优化。
+    // 其它heap会并发检查其它heap的前 128 pointer 来steal，需要清零以防止读到旧GC的pointer，而非gen2的时候没有steal就不需要清零
     PER_HEAP_FIELD_MAINTAINED mark* mark_stack_array;
 
     // This one is unusual, it's calculated in one GC and used in the next GC. so it's maintained

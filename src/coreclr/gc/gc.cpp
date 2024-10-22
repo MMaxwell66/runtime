@@ -3,7 +3,7 @@
 
 /*
 不同define的TOREAD:
-DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DOUBLY_LINKED_FL
+DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DOUBLY_LINKED_FL, FEATURE_PREMORTEM_FINALIZATION
 
 additional defined, AMD64, windows:
 FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP, FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
@@ -8442,7 +8442,7 @@ bool gc_heap::should_check_brick_for_reloc (uint8_t* o)
 #ifdef MH_SC_MARK
 // set to 1 @top@mark_phase
 inline
-int& gc_heap::mark_stack_busy()
+int& gc_heap::mark_stack_busy() // 这个没有volitale修饰，感觉同步上要更注意一点，不知道有没有问题
 {
     return  g_mark_stack_busy [(heap_number+2)*HS_CACHE_LINE_SIZE/sizeof(int)];
 }
@@ -26517,7 +26517,7 @@ BOOL gc_heap::background_mark (uint8_t* o, uint8_t* low, uint8_t* high)
 
 /*
 mt: 为了 GCDesc + array component size
-start: 要求扫到的pointer& >= start
+start: 要求扫到的pointer& >= start，使用场景如mark stack的时候，把一个object分块mark
  */
 #define go_through_object(mt,o,size,parm,start,start_useful,limit,exp)      \
 {                                                                           \
@@ -26960,15 +26960,14 @@ void mark_queue_t::verify_empty()
 }
 
 // TODO
-// 和 mark_object_simple的主要区别？
+// 和 mark_object_simple的主要区别？ A: 使用了 mark stack 类似于从递归转成迭代。而且增加了steal机制来平衡heap。
+// 不确定为什么不统一用simple, 是想对于没有pointer的object之类的可以避免stack引入的复杂度吗？
 void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL)
 {
+// 核心就是用stack打平递归，然后有些特殊逻辑是一次打平只处理最多64/100个ref，超过的话，会在stack上面放一个(object_start_addr, next_scan_addr | patial)的pair，使得stack处理为之前的ref后可以继续mark那个大object
     SERVER_SC_MARK_VOLATILE(uint8_t*)* mark_stack_tos = (SERVER_SC_MARK_VOLATILE(uint8_t*)*)mark_stack_array;
     SERVER_SC_MARK_VOLATILE(uint8_t*)* mark_stack_limit = (SERVER_SC_MARK_VOLATILE(uint8_t*)*)&mark_stack_array[mark_stack_array_length];
     SERVER_SC_MARK_VOLATILE(uint8_t*)* mark_stack_base = mark_stack_tos;
-#ifdef SORT_MARK_STACK
-    SERVER_SC_MARK_VOLATILE(uint8_t*)* sorted_tos = mark_stack_base;
-#endif //SORT_MARK_STACK
 
     // If we are doing a full GC we don't use mark list anyway so use m_boundary_fullgc that doesn't
     // update mark list.
@@ -26993,10 +26992,11 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
         const int thread = 0;
 #endif //MULTIPLE_HEAPS
 
-        if (oo && ((size_t)oo != 4))    // == 4 是个什么情况？
+        if (oo && ((size_t)oo != 4))    // == 4 是normal object被stolen
         {
             size_t s = 0;
-            if (stolen_p (oo))
+            // 这个不是在 methodtable 上面，而是object addr，所以bit是set在mark queue的entry上面，而不是object本身上面。 
+            if (stolen_p (oo)) // 这个是 partial object被stolen，要额外pop掉 partial_object的entry
             {
                 --mark_stack_tos;
                 goto next_level;
@@ -27005,6 +27005,8 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
             {
                 BOOL overflow_p = FALSE;
 
+                // 如果 s 不是正好倍数（array下是不是有可能？）会不会有问题？这里 '-1' 感觉是为了留两个slot用于partial object的情况。
+                // A这个应该也不会有问题，因为如果多出一点点的话，肯定不会是pointer
                 if (mark_stack_tos + (s) /sizeof (uint8_t*) >= (mark_stack_limit  - 1))
                 {
                     size_t num_components = ((method_table(oo))->HasComponentSize() ? ((CObjectHeader*)oo)->GetNumComponents() : 0);
@@ -27042,6 +27044,7 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
                 }
                 else
                 {
+                    // overflow 之后会怎么mark呢？A: process_mark_overflow中会线性扫描，对marked object再次scan
                     dprintf(3,("mark stack overflow for object %zx ", (size_t)oo));
                     min_overflow_address = min (min_overflow_address, oo);
                     max_overflow_address = max (max_overflow_address, oo);
@@ -27077,6 +27080,7 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
 
                             add_to_promoted_bytes (class_obj, thread);
                             *(mark_stack_tos++) = class_obj;
+                            // 这个指的是WKS GC，对于SVR GC有MH_SC_MARK，会在more_to_do那里去设置。
                             // The code below expects that the oo is still stored in the stack slot that was
                             // just popped and it "pushes" it back just by incrementing the mark_stack_tos.
                             // But the class_obj has just overwritten that stack slot and so the oo needs to
@@ -27151,7 +27155,7 @@ void gc_heap::mark_object_simple1 (uint8_t* oo, uint8_t* start THREAD_NUMBER_DCL
                     *(place-1) = 0;
 #endif //MH_SC_MARK
                     *place = 0;
-                    // shouldn't we decrease tos by 2 here??
+                    // shouldn't we decrease tos by 2 here?? // no, mark_stack_tos可能已经填充了新的ref了。
 
 more_to_do:
                     if (ref_to_continue)
@@ -27172,23 +27176,12 @@ more_to_do:
                     max_overflow_address = max (max_overflow_address, oo);
                 }
             }
-#ifdef SORT_MARK_STACK
-            if (mark_stack_tos > sorted_tos + mark_stack_array_length/8)
-            {
-                rqsort1 (sorted_tos, mark_stack_tos-1);
-                sorted_tos = mark_stack_tos-1;
-            }
-#endif //SORT_MARK_STACK
         }
     next_level:
         if (!(mark_stack_empty_p()))
         {
             oo = *(--mark_stack_tos);
             start = oo;
-
-#ifdef SORT_MARK_STACK
-            sorted_tos = min ((size_t)sorted_tos, (size_t)mark_stack_tos);
-#endif //SORT_MARK_STACK
         }
         else
             break;
@@ -27281,7 +27274,7 @@ gc_heap::mark_steal()
                         success = FALSE;
                     }
                 }
-                else if (stolen_p (next))
+                else if (stolen_p (next)) // 为什么第二个被偷了，就忽视第一个？是为了不要偷掉太多？//还有一种是不是下面的else里面，对于partial第二个被偷了，第一个就无效了。
                 {
                     //ignore the stolen guy and go to the next level
                     success = FALSE;
@@ -27296,7 +27289,7 @@ gc_heap::mark_steal()
                     start = ref_from_slot (next);
                     //re-read the object
                     o = ref_from_slot (ref_mark_stack (hp, level));
-                    if (o && start)
+                    if (o && start) // 感觉有点风险，不是很干净，这是两个void*，万一不同步导致o和start不是同一个object?
                     {
                         //steal the object
                         success = (Interlocked::CompareExchangePointer (&ref_mark_stack (hp, level+1),
@@ -27658,11 +27651,6 @@ void gc_heap::set_background_overflow_p (uint8_t* oo)
 void gc_heap::background_mark_simple1 (uint8_t* oo THREAD_NUMBER_DCL)
 {
     uint8_t** mark_stack_limit = &background_mark_stack_array[background_mark_stack_array_length];
-
-#ifdef SORT_MARK_STACK
-    uint8_t** sorted_tos = background_mark_stack_array;
-#endif //SORT_MARK_STACK
-
     background_mark_stack_tos = background_mark_stack_array;
 
     while (1)
@@ -27849,13 +27837,6 @@ void gc_heap::background_mark_simple1 (uint8_t* oo THREAD_NUMBER_DCL)
                 }
             }
         }
-#ifdef SORT_MARK_STACK
-        if (background_mark_stack_tos > sorted_tos + mark_stack_array_length/8)
-        {
-            rqsort1 (sorted_tos, background_mark_stack_tos-1);
-            sorted_tos = background_mark_stack_tos-1;
-        }
-#endif //SORT_MARK_STACK
 
 #ifdef COLLECTIBLE_CLASS
 next_level:
@@ -27865,10 +27846,6 @@ next_level:
         if (!(background_mark_stack_tos == background_mark_stack_array))
         {
             oo = *(--background_mark_stack_tos);
-
-#ifdef SORT_MARK_STACK
-            sorted_tos = (uint8_t**)min ((size_t)sorted_tos, (size_t)background_mark_stack_tos);
-#endif //SORT_MARK_STACK
         }
         else
             break;
@@ -29245,6 +29222,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
     if (full_p)
     {
         //initialize the mark stack
+        // 非full GC的时候，没有steal机制，每个heap处理自己的，作为stack使用不需要清零。而steal的时候，要设置成0以防止其它heap并发读到无效内容
         for (int i = 0; i < max_snoop_level; i++)
         {
             ((uint8_t**)(mark_stack_array))[i] = 0;
@@ -29254,7 +29232,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
     }
 #endif //MH_SC_MARK
 
-    static uint32_t num_sizedrefs = 0; // removed in .NET 9 except in standalone build for compatibility
+    static uint32_t num_sizedrefs = 0; // removed in .NET 9 except in standalone build for compatibility, used to be used in framework
 
 #ifdef MH_SC_MARK
     // if full GC && get_total_heap_size() > 100MiB
