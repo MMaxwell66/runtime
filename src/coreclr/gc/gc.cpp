@@ -26275,6 +26275,7 @@ gc_heap* gc_heap::heap_of_gc (uint8_t* o)
 // If you need it to be stricter, eg if you only want to find an object in ephemeral range,
 // you should make sure interior is within that range before calling this method.
 // 一开始的时候brick=-1所以要线性搜索，但是搜索的过程中把brick table设置成了对应brick中的highest obj从而提升了下次搜索该brick的性能
+// !!关键点是对于soh，brick的值是当前范围的highest object address，或者当当前brick没有object start的时候，-x，x是object start address在x个brick之前。
 uint8_t* gc_heap::find_object (uint8_t* interior)
 {
     assert (interior != 0);
@@ -26290,7 +26291,7 @@ uint8_t* gc_heap::find_object (uint8_t* interior)
     gen0_must_clear_bricks = FFIND_DECAY;
 
     int brick_entry = get_brick_entry(brick_of (interior));
-    if (brick_entry == 0)
+    if (brick_entry == 0) // TODO(JJ): 这个是什么时候设置的？维护的时间范围？
     {
         // this is a pointer to a UOH object
         heap_segment* seg = find_segment (interior, FALSE);
@@ -40729,6 +40730,7 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
     }
     else
     {
+        // 尝试前面一个birck的highest address object, 如果birck还没有处理过就去一直往前越过first_object之后就从first_object开始查找。
         ptrdiff_t  min_brick = (ptrdiff_t)brick_of (first_object);
         ptrdiff_t  prev_brick = (ptrdiff_t)brick - 1;
         int         brick_entry = 0;
@@ -40753,6 +40755,8 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
 
     assert (Align (size (o)) >= Align (min_obj_size));
     uint8_t*  next_o = o + Align (size (o));
+// 为什么不从 brick_of(o)开始呢？比如说o==first_object的时候，然后brick_of(next_o) > brick_of(o)的时候，brick_of(o)也没有设置过呢。
+// 不过o是从birck里面得到的话，这时候再去计算birck_of(o)就没有意义了。可能是因为这，所以才算next_o吧。
     size_t curr_cl = (size_t)next_o / brick_size;
     size_t min_cl = (size_t)first_object / brick_size;
 
@@ -40760,6 +40764,8 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
     unsigned int n_o = 1;
 #endif //TRACE_GC
 
+// 这个是说我们希望找到这个情况：1. start 2. 这一个brick里面highest object （活了填充下一个brick的值，因为上面prev_brick的逻辑，下一个brick还没有计算出来
+// 我们想知道的是 birck_of(next_o) 中的highest，所以当 next_o 正好align的时候，就需要 + brick_size。故而不用align_up
     uint8_t* next_b = min (align_lower_brick (next_o) + brick_size, start+1);
 
     while (next_o <= start)
@@ -40777,11 +40783,13 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
 
         /*
         1. o <= start < next_o
-        2. o < next_brick_start <= next_o
+        2. o < align_lower_brick (old_next_o) + brick_size <= next_o
+               align_lower_brick (old_next_o) + brick_size - 1 < next_o
+               brick_of(old_next_o) < birck_of(next_o)
         */
         if (((size_t)next_o / brick_size) != curr_cl)
         {
-            if (curr_cl >= min_cl)
+            if (curr_cl >= min_cl) // curr_cl 有可能 < min_cl 吗？
             {
                 fix_brick_to_highest (o, next_o); // 让brick指向o，即当前brick中的最高obj
             }
@@ -41305,6 +41313,11 @@ bool gc_heap::find_next_chunk(card_marking_enumerator& card_mark_enumerator, hea
 // 先去看 mark_through_cards_for_uoh_objects 那里少一点逻辑，但整体上是一样的
 // 看这个代码要注意的一些事：
 // 1. 这个扫card table的同时也做了一件很重要的事情是更新card table的数据，如果没有cross gen的ref就会把card table reset。可能是为了后面relocate之类的时候加速？
+//
+// 和 mark_through_cards_for_uoh_objects 区别的几个点：
+// 1. 处理了gen2 + gen1(when gen0 GC) 见 `o >= gen_boundary` 的 if block
+//    这里还有一个问题就是 n_eph_soh 的统计不知道是不精准还是by design，会计入 this->gen1 => other heap->gen1, 但不会计入 this->gen1 => this->gen1
+// 2. 使用了 brick table 和 card 组合，从而避免了 uoh 中 +size(o) 的go through objects
 void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_MARKING_STEALING_ARG(gc_heap* hpt))
 {
 #ifdef BACKGROUND_GC
@@ -41353,7 +41366,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
     uint8_t*      nhigh             = (relocating ?
                                        heap_segment_plan_allocated (ephemeral_heap_segment) : high);
 #endif //USE_REGIONS
-    heap_segment* seg               = heap_segment_rw (generation_start_segment (oldest_gen)); // 从debug结果来看这个就是ephemeral_heap_segment
+    heap_segment* seg               = heap_segment_rw (generation_start_segment (oldest_gen)); // ~~从debug结果来看这个就是ephemeral_heap_segment~~ nop, 应该是gen2最后一个segment是ephemeral_heap_segment
     PREFIX_ASSUME(seg != NULL);
 
     uint8_t*      beg               = get_soh_start_object (seg, oldest_gen);
@@ -41364,7 +41377,7 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
 
     size_t  card_word_end = (card_of (align_on_card_word (end)) / card_word_width);
 
-    size_t        n_eph             = 0; // 有多少ptr指向lower gen的
+    size_t        n_eph             = 0; // 有多少ptr指向lower gen的，但是不是很精准，this->gen1 => other heap->gen1 也会被计算进去。
     size_t        n_gen             = 0; // 有多少ptr指向<=condemn_gen的
     size_t        n_card_set        = 0;
 
@@ -41631,10 +41644,10 @@ go_through_refs:
                                                  else if (poo < (uint8_t**)start_address)
                                                      {poo = (uint8_t**)start_address;}
                                              }
-                                         }
+                                         } // start_address >= limit 的情况是找到的下一个card超过了end（因为find card的逻辑是根据card_word_end找的，会align up）从而 card_address (card) >= end = limit
                                          else if (foundp && (start_address < limit))
                                          {
-                                             cont_o = find_first_object (start_address, o);
+                                             cont_o = find_first_object (start_address, o); // 为啥不next_o?
                                              goto end_object;
                                          }
                                          else
@@ -46649,7 +46662,7 @@ go_through_refs:
                                     }
                                     else
                                     {
-// 这个有两点，对于 foundp 但是第二段 false 没啥，但是如果 foundp == false, 其实可以直接断过整个segment, 免掉go through objects.
+// 这个有两点，对于 foundp 但是第二段 false 没啥，但是如果 foundp == false, 其实可以直接断过整个segment, 免掉go through objects. (其实就是soh那里的 end_limit 的逻辑，不知道为什么这里没有)
 // 对于 foundp，但是比如card跳过了很多的情况，主要还是考虑到start_address不是object addr，有可能是inner ptr，就比较麻烦，需要go through object找到start
 // 但是不是好像也可以用 find_object 之类的处理。毕竟 mark stack 的时候本身就能处理 inner pointer
 //
