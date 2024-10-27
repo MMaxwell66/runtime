@@ -941,7 +941,8 @@ respin:
     // after the work is done.
     // Note that you cannot call this twice in a row on the same thread. Plus there's no
     // need to call it twice in row - you should just merge the work.
-    // 会不会发生这样的情况，第一个thread r_join成功了，然后把其中的活都做了之后r_restart了，然后其它thread来到了r_join就有再次进入了r_join保护的代码段了。
+    // 会不会发生这样的情况，第一个thread r_join成功了，然后把其中的活都做了之后r_restart+r_init了，然后其它thread来到了r_join就有再次进入了r_join保护的代码段了。
+    // A: 从目前的使用来看，只有一个地方用了r_join，而且r_init是在之后的一个 joined 的保护下进行的，所以不会出现问题。
     BOOL r_join (gc_heap* gch, int join_id)
     {
 
@@ -8490,7 +8491,8 @@ void gc_heap::make_c_mark_list (uint8_t** arr)
 static const size_t card_bundle_word_width = 32;
 
 // How do we express the fact that 32 bits (card_word_width) is one uint32_t?
-static const size_t card_bundle_size = (size_t)(GC_PAGE_SIZE / (sizeof(uint32_t)*card_bundle_word_width));
+// 期望是一个card_bundle = 32bits, 覆盖一个 PAGE_SIZE，问 card bundle 一个 bit 代表了几个 card word？
+static const size_t card_bundle_size = (size_t)(GC_PAGE_SIZE / (sizeof(uint32_t)*card_bundle_word_width)); // = 32
 
 inline
 size_t card_bundle_word (size_t cardb)
@@ -8757,7 +8759,7 @@ uint8_t* align_on_card (uint8_t* add)
 {
     return (uint8_t*)((size_t)(add + card_size - 1) & ~(card_size - 1 ));
 }
-inline
+inline // align_upper, (64bit) 8KiB
 uint8_t* align_on_card_word (uint8_t* add)
 {
     return (uint8_t*) ((size_t)(add + (card_size*card_word_width)-1) & ~(card_size*card_word_width - 1));
@@ -26518,6 +26520,7 @@ BOOL gc_heap::background_mark (uint8_t* o, uint8_t* low, uint8_t* high)
 /*
 mt: 为了 GCDesc + array component size
 start: 要求扫到的pointer& >= start，使用场景如mark stack的时候，把一个object分块mark
+看上去应该是保证从低地址扫起，包括array也是先扫了前面的element。比如说scan card的时候，依赖于这个顺序保证card扫干净
  */
 #define go_through_object(mt,o,size,parm,start,start_useful,limit,exp)      \
 {                                                                           \
@@ -29437,6 +29440,7 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
 
 #ifdef CARD_BUNDLE
 #ifdef MULTIPLE_HEAPS
+            // 下面的处理r_join之外的在AMD64下是 no-nop
             if (gc_t_join.r_join(this, gc_r_join_update_card_bundle))
             {
 #endif //MULTIPLE_HEAPS
@@ -40420,7 +40424,7 @@ void gc_heap::bgc_tuning::record_and_adjust_bgc_end()
 #endif //BGC_SERVO_TUNING
 #endif //BACKGROUND_GC
 
-//Clear the cards [start_card, end_card[
+//Clear the cards [start_card, end_card[ // 就是清理 card_table （但是没有清理 card_bundle，是因为太复杂？A: clear bundle是在card_bundle_clear中，就是找card的时候如果发现bundle下面都clear回去clear bundle）
 void gc_heap::clear_cards (size_t start_card, size_t end_card)
 {
     if (start_card < end_card)
@@ -40808,6 +40812,7 @@ uint8_t* gc_heap::find_first_object (uint8_t* start, uint8_t* first_object)
 #ifdef CARD_BUNDLE
 // Find the first non-zero card word between cardw and cardw_end.
 // The index of the word we find is returned in cardw.
+// 基本上就是找到一个card_word包含至少一个bit set的，会使用card bundle加速。side effect是会reset card bundle，如果发现对应的其实没有bit set
 BOOL gc_heap::find_card_dword (size_t& cardw, size_t cardw_end)
 {
     dprintf (3, ("gc: %zd, find_card_dword cardw: %zx, cardw_end: %zx",
@@ -40849,6 +40854,8 @@ BOOL gc_heap::find_card_dword (size_t& cardw, size_t cardw_end)
                 cardw = (card_word - &card_table[0]);
                 return TRUE;
             }
+
+            // 尝试往前找一个card word和往后找到bundle负责范围的end，看看是不是没有bit set，是的话，reset card bundle bit to 0
             // explore the beginning of the card bundle so we can possibly clear it
             if (cardw == (card_bundle_cardw (cardb) + 1) && !card_table[cardw-1])
             {
@@ -40902,7 +40909,9 @@ BOOL gc_heap::find_card_dword (size_t& cardw, size_t cardw_end)
 //                              As output, the first card that's set.
 //     card_word_end : The card word at which to stop looking.
 //     end_card      : [out] The last card which is set.
-BOOL gc_heap::find_card(uint32_t* card_table,   // search [card, card_word_end*32)
+//
+// search [card, card_word_end*32) 找到一个范围 [card, end_card) 所有的对应 bit 都是 set 的。
+BOOL gc_heap::find_card(uint32_t* card_table,
                         size_t&   card,
                         size_t    card_word_end,
                         size_t&   end_card)
@@ -41039,6 +41048,7 @@ gc_heap::compute_next_boundary (int gen_number,
 }
 #endif //!USE_REGIONS
 
+// 这个helper只是额外进行了 n_gen 和 cg_pointers_found 的统计，然后就forward给fn
 // For regions -
 // n_gen means it's pointing into the condemned regions so it's incremented
 // if the child object's region is <= condemned_gen.
@@ -41146,7 +41156,7 @@ BOOL gc_heap::card_transition (uint8_t* po, uint8_t* end, size_t card_word_end,
         dprintf(3,(" CC [%zx, %zx[ ",
                 (size_t)card_address(card), (size_t)po));
         clear_cards (card, card_of(po));
-        n_card_set -= (card_of (po) - card);
+        n_card_set -= (card_of (po) - card); // 这个感觉有点风险，因为 card_of(po) 有可能溢出 limit 导致 n_card_set 数量计算错误。但这个只用于debug，所以没啥关系。
         n_cards_cleared += (card_of (po) - card);
 
     }
@@ -41250,7 +41260,7 @@ bool card_marking_enumerator::move_next(heap_segment* seg, uint8_t*& low, uint8_
         if (segment == nullptr)
         {
             // keep the chunk index for later
-            old_chunk_index = chunk_index;
+            old_chunk_index = chunk_index; // 这一行应该是copy过来的，没啥用，因为这个private已经读不到了
 
             dprintf (3, ("cme:mn oci: %u no more segments", old_chunk_index));
 
@@ -41273,7 +41283,7 @@ bool gc_heap::find_next_chunk(card_marking_enumerator& card_mark_enumerator, hea
             dprintf(3, ("NewC: %zx, start: %zx, end: %zx",
                 (size_t)card, (size_t)start_address,
                 (size_t)card_address(end_card)));
-            limit = min(card_mark_enumerator.get_chunk_high(), card_address(end_card));
+            limit = min(card_mark_enumerator.get_chunk_high(), card_address(end_card)); // 理论上，两种情况，第一种式chunk end，这种下，第二个肯定不会是min。还有一种是end,这种情况只要min(end)，没必要保留这个get_chunk_high啊
             dprintf (3, ("New run of cards on heap %d: [%zx,%zx[", heap_number, (size_t)start_address, (size_t)limit));
             return true;
         }
@@ -41286,12 +41296,13 @@ bool gc_heap::find_next_chunk(card_marking_enumerator& card_mark_enumerator, hea
             return false;
         }
         card = max(card, card_of(chunk_low));
-        card_word_end = (card_of(align_on_card_word(chunk_high)) / card_word_width);
+        card_word_end = (card_of(align_on_card_word(chunk_high)) / card_word_width); // chunk_high 要不一定是chunk end，它是card word aligned的，否则是end，所以需要重新align下。
         dprintf (3, ("Moved to next chunk on heap %d: [%zx,%zx[", heap_number, (size_t)chunk_low, (size_t)chunk_high));
     }
 }
 #endif // FEATURE_CARD_MARKING_STEALING
 
+// 先去看 mark_through_cards_for_uoh_objects 那里少一点逻辑，但整体上是一样的
 // 看这个代码要注意的一些事：
 // 1. 这个扫card table的同时也做了一件很重要的事情是更新card table的数据，如果没有cross gen的ref就会把card table reset。可能是为了后面relocate之类的时候加速？
 void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_MARKING_STEALING_ARG(gc_heap* hpt))
@@ -41342,11 +41353,11 @@ void gc_heap::mark_through_cards_for_segments (card_fn fn, BOOL relocating CARD_
     uint8_t*      nhigh             = (relocating ?
                                        heap_segment_plan_allocated (ephemeral_heap_segment) : high);
 #endif //USE_REGIONS
-    heap_segment* seg               = heap_segment_rw (generation_start_segment (oldest_gen));
+    heap_segment* seg               = heap_segment_rw (generation_start_segment (oldest_gen)); // 从debug结果来看这个就是ephemeral_heap_segment
     PREFIX_ASSUME(seg != NULL);
 
     uint8_t*      beg               = get_soh_start_object (seg, oldest_gen);
-    uint8_t*      end               = compute_next_end (seg, low);
+    uint8_t*      end               = compute_next_end (seg, low); // 如果是ephemeral的话，返回low，也就是end是condemned gen的开头。
     uint8_t*      last_object       = beg;
 
     size_t  cg_pointers_found = 0;
@@ -46358,6 +46369,19 @@ void gc_heap::relocate_in_uoh_objects (int gen_num)
     }
 }
 
+/*
+基本上就是通过 card_bundle (GC空间大于一定大小时启用) + card_table 两层去找到修改过 ref 的 cards
+然后就是如果reference在condemned范围内，就是mark reference。
+其他的就是
+1. 如果发现没有 cross gen ref 就会clear card table
+2. SVR下会以 2MiB(64bit) 大小分块去处理，从而允许steal机制。
+3. 会统计指向 gen1 和 gen0 的比例，在之后确定generation_to_condemn的时候会用来启发式
+4. 会用 +size(o) go through segments 而没有使用 find_object 来跳过中间没有set的card，但如果seg末尾没有card set了，会跳过后面的。
+   Q: mark_through_cards_for_segments那里有使用吗？对于loh,poh可能还好。那里优化空间多一点。
+   A: 看起来是的，那里使用了 find_first_object 其中包括了 brick 的逻辑。不过对于loh这个还好，但是对于poh可能还是有点影响，不过现在poh会有引用吗？
+   一方面 https://github.com/dotnet/runtime/pull/47651 中把一些 static 移入了 poh 但这个感觉又和 read only segment 有点类似？还是说如果有ref/collectable就会是poh?
+   ~~不过现在poh只允许用于用不包含ptr的array，应该影响还好？~~ .NET 8 好像就允许了。。。使用时候可能还是要注意下。
+*/
 void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
                                                   int gen_num,
                                                   BOOL relocating
@@ -46377,14 +46401,14 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
     uint8_t*      beg               = get_uoh_start_object (seg, oldest_gen);
     uint8_t*      end               = heap_segment_allocated (seg);
 
-    size_t  cg_pointers_found = 0;
+    size_t  cg_pointers_found = 0; // scanning gen 有多少个 fields 指向 ephemeral gen? 每个card内统计，并入n_eph，然后reset
 
     size_t  card_word_end = (card_of (align_on_card_word (end)) /
                              card_word_width);
-
+// 用于计算 generation_skip_ratio，即 higher gen -> condemned gen / higher gen -> ephemeral gen 的比例。
     size_t      n_eph             = 0;
-    size_t      n_gen             = 0;
-    size_t      n_card_set        = 0;
+    size_t      n_gen             = 0; // scanning gen 有多少个 fields 指向 condemned gen? [gc_low, gc_high)
+    size_t      n_card_set        = 0; // dprint
 
 #ifdef USE_REGIONS
     uint8_t*    next_boundary = 0;
@@ -46432,7 +46456,7 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
     while (1)
     {
         // o < end是不是用来判断o == end的end条件？
-        if ((o < end) && (card_of(o) > card))
+        if ((o < end) && (card_of(o) > card)) // 这个看上去应该是下面 card_transition 那里，foundp == false 之后会因为 while (o < limit) 的判断来到这里。然后把seg后面全部跳过。
         {
             dprintf (3, ("Found %zd cg pointers", cg_pointers_found));
             if (cg_pointers_found == 0)
@@ -46442,6 +46466,7 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
                 last_object_processed = min(limit, o);
 #endif // FEATURE_CARD_MARKING_STEALING
                 dprintf (3, (" Clearing cards [%zx, %zx[ ", (size_t)card_address(card), (size_t)last_object_processed));
+// 这里的clear范围也很大，感觉没必要，而且total_cards_cleared统计也有问题，不过都是debug用的。
                 clear_cards (card, card_of((uint8_t*)last_object_processed));
                 total_cards_cleared += (card_of((uint8_t*)last_object_processed) - card);
             }
@@ -46452,9 +46477,17 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
         // to be proof: assert: if o < end then card == card_of(o)
         if ((o < end) &&(card >= end_card))
         {
+/*
+additional note 1:
+因为一个object可能跨多个card所以有一个问题就是这种情况下，这个object会怎么扫？是分两段扫？还是重复扫？
+答案是让你意外的，1. 目前card mark这里没有使用find_object之类的去跳到要扫的地方，而是通过go through object by size的方式scan
+2. 在go through ref的时候，如果进入了之后的card，会重新计算start_address，然后跳过之间的。也就是说如果object跨card，前面的段不会去扫后面的。而后面的因为start_address的原因也不会去扫前面的。
+即，每段各扫各的，不会重复扫。
+*/
 #ifdef FEATURE_CARD_MARKING_STEALING
             // find another chunk with some cards set
             foundp = find_next_chunk(card_mark_enumerator, seg, n_card_set, start_address, limit, card, end_card, card_word_end);
+            // Q: 为什么这里 start_address 不用 max beg?感觉还是可以max(beg)一下的，下面可以少access一些objects
 #else // FEATURE_CARD_MARKING_STEALING
             foundp = find_card (card_table, card, card_word_end, end_card);
             if (foundp)
@@ -46503,6 +46536,8 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
             }
         }
 
+// 这下面的 card_transition 其实已经基本上把 find_card / find_next_chunk 更执行掉了，退出 while (o < limit) 的时候应该已经 foundp == false了
+// 然后有一个可能的性能优化就是用 find_object + start_address 来避免通过 +size(o) 来scan
         assert (card_set_p (card));
         {
             dprintf(3,("card %zx: o: %zx, l: %zx[ ",
@@ -46534,7 +46569,7 @@ void gc_heap::mark_through_cards_for_uoh_objects (card_fn fn,
 #endif //BACKGROUND_GC
 
 #ifdef COLLECTIBLE_CLASS
-                if (is_collectible(o))
+                if (is_collectible(o)) // 怎么说，class object应该不会出现 higher gen reference lower gen 的情况吧？有必要在这种情况下去mark吗？
                 {
                     BOOL passed_end_card_p = FALSE;
 
@@ -46605,7 +46640,7 @@ go_through_refs:
                                     if (foundp && (card_address (card) < next_o))
                                     {
                                         //new_start();
-                                        {
+                                        {   // 好hacky,强行插入到macro的代码里面去，hhh
                                             if (ppstop <= (uint8_t**)start_address)
                                             {break;}
                                             else if (poo < (uint8_t**)start_address)
@@ -46614,6 +46649,12 @@ go_through_refs:
                                     }
                                     else
                                     {
+// 这个有两点，对于 foundp 但是第二段 false 没啥，但是如果 foundp == false, 其实可以直接断过整个segment, 免掉go through objects.
+// 对于 foundp，但是比如card跳过了很多的情况，主要还是考虑到start_address不是object addr，有可能是inner ptr，就比较麻烦，需要go through object找到start
+// 但是不是好像也可以用 find_object 之类的处理。毕竟 mark stack 的时候本身就能处理 inner pointer
+//
+// note2: 这里我一开始以为如果这个seg后面没有card set了会，会一直 +size 到底，很低效，而且card都没更新，有很多find_next的重复操作。
+// 但是实际上这个时候 limit 也不会更新，所以扫到 limit 之后，这个大的 while (o < limit) 的循环就会 break，然后上面的就会跳到下一个seg去。
                                         goto end_object;
                                     }
                                 }
@@ -48827,7 +48868,7 @@ bool GCHeap::IsPromoted(Object* object)
         else
 #endif //BACKGROUND_GC
         {
-            is_marked = (!((o < hp->highest_address) && (o >= hp->lowest_address))
+            is_marked = (!((o < hp->highest_address) && (o >= hp->lowest_address)) // 为什么只比较heap0?这个是一个per heap的field啊，而且下面eph的就用了heap_of
                         || hp->is_mark_set (o));
         }
     }

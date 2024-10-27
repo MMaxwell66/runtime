@@ -20,6 +20,7 @@
 
 #include "gchandletableimpl.h"
 
+// TODO: 这里单列表什么时候会增加node?
 HandleTableMap g_HandleTableMap;
 
 // Array of contexts used while scanning dependent handles for promotion. There are as many contexts as GC

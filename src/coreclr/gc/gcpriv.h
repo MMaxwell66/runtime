@@ -638,7 +638,7 @@ public:
     BOOL heap_expansion;
     uint32_t concurrent; // this GC is BGC // decide after joined_generation_to_condemn
     BOOL demotion;
-    BOOL card_bundles;
+    BOOL card_bundles; // 当 reserved memory 超过一定的 threshold 时，会开启 card bundle
     int  gen0_reduction_count;
     BOOL should_lock_elevation;
     int elevation_locked_count;
@@ -1144,7 +1144,11 @@ public:
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
     //total object size after a GC, ie, doesn't include fragmentation
     size_t    current_size;
-    size_t    collection_count; // 当前gen的GC index, 有可能小于younger gen, update@update_collection_counts(top@gc1)
+    // 当前这个gen的GC的次数，对于gen0是所以的GC次数，但对于higher gen来说，有可能小于younger gen.
+    // 所以拿到GC次数的一个方法是 `dd_collection_count(dynamic_data_of(0))`
+    // Q: 为什么不用gen0的gc_clock还是用collection_count还是说都一样?
+    // update@update_collection_counts(top@gc1)
+    size_t    collection_count;
     size_t    promoted_size;                // 一个使用是用于计算 GetGCMemoryInfo // Q: BGC会修改这个值吗？还是说应该是SINGLE_GC_ALLOC所以只有在pause阶段BGC才会动这里的数据？
     size_t    freach_previous_promotion;
 
@@ -3623,10 +3627,13 @@ private:
 #else //USE_REGIONS
     // Highest and lowest address for ephemeral generations.
     // For regions these are global fields.
-    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_low;
-    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_high;
+    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_low; // gen1 allocation_start
+    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_high; // eph seg reserved
 
     // For regions these are global fields
+    // [segment] init@top@gc1
+    //   gen2: [this.lowest_address, this.highest_address)
+    //   gen0/1: [generation_allocation_start(n), heap_segment_reserved(ephemeral)]
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_low; // lowest address being condemned
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_high; // highest address being condemned
 
@@ -3648,6 +3655,7 @@ private:
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(uint32_t)    card_mark_chunk_index_poh;
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(bool)        card_mark_done_uoh;
 
+// [gen0/1][svr] reset during mark_phase
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(size_t) n_eph_soh;
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(size_t) n_gen_soh;
     PER_HEAP_FIELD_SINGLE_GC VOLATILE(size_t) n_eph_loh;
@@ -4202,8 +4210,8 @@ private:
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC VOLATILE(uint8_t*)  ephemeral_high;
 
     // For segments these are per heap fields // 似乎被is_in_condemned_gc代替了
-    // [segment] init@top@gc1
-    // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1。对于segment是整个GC范围或者当前gen开始到ephemeral reserved
+    // [segment] 见上面另外一个定义
+    // 当前正在GC这个gen的范围，对于gen2, whole region, 对于 gen0/1, min/max all region of gen0/1。
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_low; // low end of the lowest region being condemned
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC uint8_t* gc_high; // high end of the highest region being condemned
 #endif //USE_REGIONS
@@ -4750,6 +4758,7 @@ private:
     //Does not correspond to a segment
     static const int FreeList = total_generation_count + ExtraSegCount;
 
+// m_Array <= m_FillPointers[0] <= m_FillPointers[1] <= ... <= m_FillPointers[6] <= m_EndArrary
     PTR_PTR_Object m_FillPointers[total_generation_count + ExtraSegCount];
     PTR_PTR_Object m_Array;
     PTR_PTR_Object m_EndArray;
@@ -4982,7 +4991,7 @@ alloc_context* generation_alloc_context (generation* inst)
 
 #ifndef USE_REGIONS
 inline
-uint8_t*& generation_allocation_start (generation* inst)
+uint8_t*& generation_allocation_start (generation* inst) // 对于 gen2 看上去是第一个非 readonly seg 的开头object，对于 loh/poh 是对一个seg的开头object，指向mt，而且第一个一定是free object
 {
   return inst->allocation_start;
 }
@@ -5814,9 +5823,9 @@ dynamic_data* gc_heap::dynamic_data_of (int gen_number)
 // The value of card_size is determined empirically according to the average size of an object
 // In the code we also rely on the assumption that one card_table entry (uint32_t) covers an entire os page
 //
-#if defined (HOST_64BIT)
+#if defined (HOST_64BIT) // 256
 #define card_size ((size_t)(2*GC_PAGE_SIZE/card_word_width))
-#else
+#else // 128
 #define card_size ((size_t)(GC_PAGE_SIZE/card_word_width))
 #endif // HOST_64BIT
 
@@ -5843,15 +5852,21 @@ size_t gcard_of (uint8_t* object)
 
 // REGIONS TODO: this shouldn't need gc_low for regions.
 #define THIS_ARG    , __this
+/*
+核心的多线程分发想法就是把segment分成 CARD_MARKING_STEALING_GRANULARITY 大小一段的 chunk，然后多线程拿取chunk
+chunk的拿取是给每个chunk一个序号，先seg内递增，然后下一个seg接上去。
+细节1：segment_start_chunk_index 是之间的seg累计的chunk量，用来从interlocked inc的值中减去从而排除之前的seg。
+细节2：这个推进的模型是move_next这种iter的模型，但是希望在seg切换之后先不动等待caller也move到下一个seg，这个是通过把上一次的index放到old_chunk_index中去，之后如果 old_chunk_index != ~0，说明之前暂存了状态，move_next的时候会恢复状态。
+ */
 class card_marking_enumerator
 {
 private:
     heap_segment*       segment;
     uint8_t*            gc_low;
-    uint32_t            segment_start_chunk_index;
+    uint32_t            segment_start_chunk_index; // 见细节1
     VOLATILE(uint32_t)* chunk_index_counter;
-    uint8_t*            chunk_high;
-    uint32_t            old_chunk_index;
+    uint8_t*            chunk_high; // 用途？
+    uint32_t            old_chunk_index; // 见细节2
     static const uint32_t INVALID_CHUNK_INDEX = ~0u;
 
 public:
