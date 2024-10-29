@@ -22,7 +22,7 @@
 // select between them based on the ScanContext passed to us by the GC during the mark phase.
 struct DhContext
 {
-    bool            m_fUnpromotedPrimaries;     // Did last scan find at least one non-null unpromoted primary?
+    bool            m_fUnpromotedPrimaries;     // Did last scan find at least one non-null unpromoted primary? // 如果是false，说明所有的dh都已经处理完成，没有必要再次扫描
     bool            m_fPromoted;                // Did last scan promote at least one secondary?
     promote_func   *m_pfnPromoteFunction;       // GC promote callback to be used for all secondary promotions
     int             m_iCondemned;               // The condemned generation

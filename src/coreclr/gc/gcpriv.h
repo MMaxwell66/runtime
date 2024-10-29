@@ -149,7 +149,7 @@ inline void FATAL_GC_ERROR()
 // Server GC we will balance regions between heaps.
 // For now disable regions for StandAlone GC, NativeAOT and MacOS builds
 #if defined (HOST_64BIT) && !defined (BUILD_AS_STANDALONE) && !defined(__APPLE__)
-#define USE_REGIONS
+// #define USE_REGIONS
 #endif //HOST_64BIT && BUILD_AS_STANDALONE
 
 //#define SPINLOCK_HISTORY
@@ -632,7 +632,7 @@ class gc_mechanisms
 public:
     VOLATILE(size_t) gc_index; // starts from 1 for the first GC, like dd_collection_count
     int condemned_generation; // 可能值有：max_generation(2)
-    BOOL promotion; // case1: settings.condemned_generation > 1
+    BOOL promotion; // 如果是gen2 GC 或者 gen0/gen1 GC时 higher gen size太小 || <=当前gen存活size太大
     BOOL compaction;
     BOOL loh_compaction;
     BOOL heap_expansion;
@@ -1169,7 +1169,7 @@ public:
     //
     // The following fields (and fields in sdata) are initialized during GC init time and do not change.
     //
-    size_t    min_size;
+    size_t    min_size; // from static_data, 在init的时候计算得到，之后不会改变。很latency level有关 // 现在CPU甚至 gen0 min > gen1 min
     static_data* sdata;
 };
 
@@ -3435,7 +3435,10 @@ private:
 
     PER_HEAP_FIELD_SINGLE_GC int gc_policy;  //sweep, compact, expand
 
+// 在mark object的过程中，计算被mark object的size总和。统计不是很准确，有可能因为并发重复统计object
+// 用途1：判断存活的object大小是否太大，如果太大就会触发promotion
     PER_HEAP_FIELD_SINGLE_GC size_t total_promoted_bytes;
+// 这个GC新进dead object引用的objects size总和
     PER_HEAP_FIELD_SINGLE_GC size_t finalization_promoted_bytes;
 
     PER_HEAP_FIELD_SINGLE_GC size_t mark_stack_tos;
@@ -4118,7 +4121,7 @@ private:
     // PER_HEAP_ISOLATED_FIELD_SINGLE_GC fields //
     /********************************************/
 
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool mark_list_overflow;
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool mark_list_overflow; // 就算 mark_list_index > mark_list_end，也有可能是 false，当我们主动放弃使用 mark list 的时候，比如 gen2 / mark list 占用的空间太大，之类的。
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL proceed_with_gc_p; // false due to no GC region
 

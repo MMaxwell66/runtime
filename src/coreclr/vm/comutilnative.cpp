@@ -1128,6 +1128,7 @@ FCIMPL1(void, GCInterface::ReRegisterForFinalize, Object *obj)
     if (obj->GetMethodTable()->HasFinalizer())
     {
         HELPER_METHOD_FRAME_BEGIN_1(obj);
+// TODO(JJ): 这个 -1 会被 reset -> 0，会导致 finalizer gen 和 obj gen 不同，会不会有问题？
         if (!GCHeapUtilities::GetGCHeap()->RegisterForFinalization(-1, obj))
         {
             ThrowOutOfMemory();

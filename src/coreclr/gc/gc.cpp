@@ -2261,7 +2261,7 @@ void stomp_write_barrier_initialize(uint8_t* ephemeral_low, uint8_t* ephemeral_h
 #define highbits(wrd, bits) ((wrd) & ~((1 << (bits))-1))
 
 // Things we need to manually initialize:
-// gen0 min_size - based on cache
+// gen0 min_size - based on cache // 在现在的CPU一般是 WKS: 1/2*L3 SVR: 5/8*L3
 // gen0/1 max_size - based on segment size
 static static_data static_data_table[latency_level_last - latency_level_first + 1][total_generation_count] =
 {
@@ -10483,6 +10483,7 @@ static size_t target_mark_count_for_heap (size_t total_mark_count, int heap_coun
     else
         return average_mark_count;
 }
+// 就是把每个heap的mark_list调整到统一大小，（多出的都给最后一个heap而不是 + 1），利用memcpy来移动mark list
 NOINLINE
 uint8_t** gc_heap::equalize_mark_lists (size_t total_mark_list_size)
 {
@@ -10509,6 +10510,7 @@ uint8_t** gc_heap::equalize_mark_lists (size_t total_mark_list_size)
     if (local_mark_count[heap_number] >= this_target_mark_count)
         return (mark_list + this_target_mark_count);
 
+    // 这个算法是和heap_number无关嘛？因为每个线程都去调整大小，最终状态肯定是希望是一样的，不然数据就会丢失。不过看起来没啥问题，heap_number只是用来提前结束。
     // In the following, we try to fill the deficit in heap "deficit_heap_index" with
     // surplus from "surplus_heap_index".
     // If there is no deficit or surplus (anymore), the indices are advanced.
@@ -10561,7 +10563,7 @@ size_t gc_heap::sort_mark_list()
 #endif //USE_REGIONS
         )
     {
-        // fake a mark list overflow so merge_mark_lists knows to quit early
+        // fake a mark list overflow so merge_mark_lists knows to quit early // 其实好像是用该函数的return value去判断的。
         mark_list_index = mark_list_end + 1;
         return 0;
     }
@@ -10623,7 +10625,7 @@ size_t gc_heap::sort_mark_list()
         // let's not count this as a mark list overflow
         dprintf (2, ("h%d total mark list %zd is too large > (%zd / 256), don't use",
             heap_number, total_mark_list_size, total_ephemeral_size));
-        mark_list_overflow = false;
+        mark_list_overflow = false; // 因为这个 overflow 主要影响是否要 grow_mark_list。这个情况下 mark list 大小其实是够的，所以不用 grow
         return 0;
     }
 
@@ -10744,7 +10746,7 @@ size_t gc_heap::sort_mark_list()
 #ifdef _DEBUG
         int last_heap_num = heap_num;
 #endif //_DEBUG
-        do
+        do // 其实也可用 heap_of 之类的去直接找到对应的heap_num
         {
             heap_num++;
             if (heap_num >= n_heaps)
@@ -10816,6 +10818,7 @@ size_t gc_heap::sort_mark_list()
 
 void gc_heap::append_to_mark_list (uint8_t **start, uint8_t **end)
 {
+// 当 slots_to_copy == slots_available 的时候， mark_list_index 在返回时会变成 mark_list_end+1就溢出，该heap在plan_phase时不会使用mark_list，详见merge_mark_lists注释
     size_t slots_needed = end - start;
     size_t slots_available = mark_list_end + 1 - mark_list_index;
     size_t slots_to_copy = min(slots_needed, slots_available);
@@ -10855,6 +10858,12 @@ uint8_t** gc_heap::get_region_mark_list (BOOL& use_mark_list, uint8_t* start, ui
     size_t region_number = get_basic_region_index_for_address (start);
     size_t source_number = region_number;
 #else //USE_REGIONS
+// 返回时的状态有两种：
+// 1. source_count == 1
+//  [mark_list, mark_list_index), mark_list_index == mark_list_end, locate in g_mark_list
+// 2. source_count != 0
+//  [mark_list, mark_list_index), mark_list_index <= mark_list_end + 1 == mark_list_size, locate in g_mark_list_copy
+//  当 mark_list_index == mark_list_end + 1 的时候，说明发生了一次，这个heap在plan_phase中就不会使用了。（其他heap还可以使用）
 void gc_heap::merge_mark_lists (size_t total_mark_list_size)
 {
     // in case of mark list overflow, don't bother
@@ -10890,7 +10899,7 @@ void gc_heap::merge_mark_lists (size_t total_mark_list_size)
 #endif //USE_REGIONS
 
     uint8_t** source[MAX_SUPPORTED_CPUS];
-    uint8_t** source_end[MAX_SUPPORTED_CPUS];
+    uint8_t** source_end[MAX_SUPPORTED_CPUS]; // exclusive
     int source_heap[MAX_SUPPORTED_CPUS];
     int source_count = 0;
 
@@ -10930,7 +10939,7 @@ void gc_heap::merge_mark_lists (size_t total_mark_list_size)
 
     mark_list = &g_mark_list_copy [heap_number*mark_list_size];
     mark_list_index = mark_list;
-    mark_list_end = &mark_list [mark_list_size-1];
+    mark_list_end = &mark_list [mark_list_size-1]; // inclusive
     int piece_count = 0;
     if (source_count == 0)
     {
@@ -26348,6 +26357,7 @@ uint8_t* gc_heap::find_object (uint8_t* interior)
 #ifdef MULTIPLE_HEAPS
 
 #ifdef GC_CONFIG_DRIVEN // 如果把 mark_list_index++ 拿出来是不是会好一点，codegen也有可能有机会变成 conditional mov (目前codegen是 cond jump + add at both branch)
+// 这个 else ++ 只是给 dprint 用的，实际上溢出之后就没啥意义，之后还是会被reset到 mark_list_end+1
 #define m_boundary(o) {if (mark_list_index <= mark_list_end) {*mark_list_index = o;mark_list_index++;} else {mark_list_index++;}}
 #else //GC_CONFIG_DRIVEN
 #define m_boundary(o) {if (mark_list_index <= mark_list_end) {*mark_list_index = o;mark_list_index++;}}
@@ -27210,7 +27220,7 @@ int find_next_buddy_heap (int this_heap_number, int current_buddy, int n_heaps)
     return current_buddy;
 }
 
-void
+void // 就是去偷别的heap在 mark_object_simple1 里面放 mark stack 放入的objects。但之后检查 mark stack 前128个entry。
 gc_heap::mark_steal()
 {
     mark_stack_busy() = 0;
@@ -27367,7 +27377,7 @@ gc_heap::mark_steal()
         {
             continue;
         }
-        if (!hp->mark_stack_busy())
+        if (!hp->mark_stack_busy()) // 有一点小concern是，如果被偷的heap前面max_snoop_level全部偷了，但是它还在处理更上面level的，这个时候this好像会进入busy loop，没有什么让步cpu的逻辑。
         {
             first_not_ready_level = 0;
             idle_loop_count++;
@@ -28734,7 +28744,7 @@ recheck:
         fire_mark_event (ETW::GC_ROOT_OVERFLOW, current_promoted_bytes, last_promoted_bytes);
     return overflow_p;
 }
-
+// 尝试线性的扫描溢出范围内的所有objects
 void gc_heap::process_mark_overflow_internal (int condemned_gen_number,
                                               uint8_t* min_add, uint8_t* max_add)
 {
@@ -28802,6 +28812,11 @@ void gc_heap::process_mark_overflow_internal (int condemned_gen_number,
 // also has the effect of processing any mark stack overflow.
 
 #ifdef MULTIPLE_HEAPS
+// 简单的说就是不停的扫dependent handler，因为sec可能引用到一个其它的dep handler的pri，导致我们要再去扫pri对应的sec，所以要多次扫描。
+// 用二分查找不太好，因为所有涉及mark的地方都要去二分，如果sec是一个很大的object，性能有影响。
+// 不过感觉可以用个list去存还没mark的dep handler，但也许dep handler比较少，也没啥必要。
+// 扫描条件是如果有新的object被mark，以及还有dep handler没有被mark（只有这样才有可能有新的sec会被mark）
+//
 // When multiple heaps are enabled we have must utilize a more complex algorithm in order to keep all the GC
 // worker threads synchronized. The algorithms are sufficiently divergent that we have different
 // implementations based on whether MULTIPLE_HEAPS is defined or not.
@@ -28881,6 +28896,7 @@ void gc_heap::scan_dependent_handles (int condemned_gen_number, ScanContext *sc,
                 {
                     // On the second invocation we reconcile all mark overflow ranges across the heaps. This can help
                     // load balance if some of the heaps have an abnormally large workload.
+                    // 真的吗，第二次应该只是涉及到finalizer的root，没多少overflow的可能型吧。
                     uint8_t* all_heaps_max = 0;
                     uint8_t* all_heaps_min = MAX_PTR;
                     int i;
@@ -28992,7 +29008,7 @@ int gc_heap::get_num_heaps()
     return 1;
 #endif //MULTIPLE_HEAPS
 }
-
+// 如果 higher gen size太小，或者<=当前gen存活size太大
 BOOL gc_heap::decide_on_promotion_surv (size_t threshold)
 {
 #ifdef MULTIPLE_HEAPS
@@ -29413,7 +29429,9 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
 #endif //BACKGROUND_GC
 
 #ifdef FEATURE_PREMORTEM_FINALIZATION
+// 这个应该不是finalize objects，因为那个涉及到short weak handle，不应该在这里进行。
         dprintf(3, ("Marking finalization data"));
+        // mark 处于 finalize / critical finalize 状态的 objects
         finalize_queue->GcScanRoots(GCHeap::Promote, heap_number, 0);
         drain_mark_queue();
         fire_mark_event (ETW::GC_ROOT_FQ, current_promoted_bytes, last_promoted_bytes);
@@ -29558,6 +29576,9 @@ void gc_heap::mark_phase (int condemned_gen_number, BOOL mark_only_p)
     // to optimize away further scans. The call to scan_dependent_handles is what will cycle through more
     // iterations if required and will also perform processing of any mark stack overflow once the dependent
     // handle table has been fully promoted.
+    //
+    // InitialScan可以考虑是否放到steal之前，因为如果这里引入大object，会导致heap不平衡，而scan dh很依赖于multiple heap sync
+    // 但是如果先InitialScan有可能因为其它thread没有mark到一些object导致inital scan漏掉一些。
     GCScan::GcDhInitialScan(GCHeap::Promote, condemned_gen_number, max_generation, &sc);
     scan_dependent_handles(condemned_gen_number, &sc, true);
 
@@ -32068,7 +32089,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 #ifdef GC_CONFIG_DRIVEN
     dprintf (3, ("total number of marked objects: %zd (%zd)",
                  (mark_list_index - &mark_list[0]), (mark_list_end - &mark_list[0])));
-
+// 见 merge_mark_lists 上方的注释。
     if (mark_list_index >= (mark_list_end + 1))
     {
         mark_list_index = mark_list_end + 1;
@@ -32086,7 +32107,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
     {
 #ifndef MULTIPLE_HEAPS
 #ifdef USE_VXSORT
-        do_vxsort (mark_list, mark_list_index - mark_list, slow, shigh);
+        do_vxsort (mark_list, mark_list_index - mark_list, slow, shigh); // 为什么不用类似于 server gc 的方式，从gc_low计算出来？这让mark慢了啊，这个能带来更准确的范围吗？会更快？
 #else //USE_VXSORT
         _sort (&mark_list[0], mark_list_index - 1, 0);
 #endif //USE_VXSORT
@@ -48856,7 +48877,7 @@ HRESULT GCHeap::Initialize()
     return hr;
 }
 
-////
+//// 这个名字感觉不是很好，它说的其实是是否存活，以为不是condomned gen的object也会返回true
 // GC callback functions
 bool GCHeap::IsPromoted(Object* object)
 {
@@ -51434,7 +51455,7 @@ void GCHeap::SetFinalizationRun (Object* obj)
 //--------------------------------------------------------------------
 
 inline
-unsigned int gen_segment (int gen)
+unsigned int gen_segment (int gen) // CFinalize 中 m_FillPointers 的顺序和 GC generation 顺序相反
 {
     assert (((signed)total_generation_count - gen - 1)>=0);
     return (total_generation_count - gen - 1);
@@ -51707,8 +51728,10 @@ CFinalize::ScanForFinalization (promote_func* pfn, int gen, BOOL mark_only_p,
     BOOL finalizedFound = FALSE;
 
     //start with gen and explore all the younger generations.
-    unsigned int startSeg = gen_segment (gen);
+    unsigned int startSeg = gen_segment (gen); // gen2的时候不考虑loh/poh?
     {
+        // finalize gen x 中有可能存在 object with gen y > x, 因为 GC.ReRegisterForFinalize 会放到 finalize gen 0 不管 object 导致什么是 gen
+        // 但是应该不会出现 object z where z < x
         m_PromotedCount = 0;
         for (unsigned int Seg = startSeg; Seg <= gen_segment(0); Seg++)
         {
