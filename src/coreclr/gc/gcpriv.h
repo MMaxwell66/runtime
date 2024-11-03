@@ -812,6 +812,10 @@ struct min_fl_list_info
 };
 #endif //MULTIPLE_HEAPS && USE_REGIONS
 
+/*
+first_bucket: [0, 1<<(first_bucket_bits+1))
+buckets[i]: [1<<(first_bucket_bits+1+i), 1<<(first_bucket_bits+2+i))
+*/
 class allocator
 {
     int first_bucket_bits;
@@ -821,7 +825,6 @@ class allocator
     int gen_number;
     alloc_list& alloc_list_of (unsigned int bn);
     size_t& alloc_list_damage_count_of (unsigned int bn);
-    void thread_free_item_end (uint8_t* free_item, uint8_t*& head, uint8_t*& tail, int bn);
 
 public:
     allocator (unsigned int num_b, int fbb, alloc_list* b, int gen=-1);
@@ -1169,7 +1172,7 @@ public:
     //
     // The following fields (and fields in sdata) are initialized during GC init time and do not change.
     //
-    size_t    min_size; // from static_data, 在init的时候计算得到，之后不会改变。很latency level有关 // 现在CPU甚至 gen0 min > gen1 min
+    size_t    min_size; // from static_data, 在init的时候计算得到，之后不会改变。跟latency level有关 // 现在CPU甚至 gen0 min > gen1 min
     static_data* sdata;
 };
 
@@ -3546,7 +3549,7 @@ private:
     // info on how big the plugs are for best fit which we
     // don't do in plan phase.
     // TODO: get rid of total_ephemeral_plugs.
-    PER_HEAP_FIELD_SINGLE_GC size_t total_ephemeral_size;
+    PER_HEAP_FIELD_SINGLE_GC size_t total_ephemeral_size; // reset to 0 @top@plan_phase
 #endif //!USE_REGIONS
 
 #ifdef WRITE_WATCH
@@ -3631,7 +3634,7 @@ private:
     // Highest and lowest address for ephemeral generations.
     // For regions these are global fields.
     PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_low; // gen1 allocation_start
-    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_high; // eph seg reserved
+    PER_HEAP_FIELD_SINGLE_GC uint8_t* ephemeral_high; // heap_segment_reserved(ephemeral_heap_segment)
 
     // For regions these are global fields
     // [segment] init@top@gc1
@@ -3640,8 +3643,8 @@ private:
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_low; // lowest address being condemned
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_high; // highest address being condemned
 
-    PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_low;
-    PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_high;
+    PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_low; // reset to ~0 @top@plan_phase
+    PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_high; // reset to eph_seg allocated @top@plan_phase
     PER_HEAP_FIELD_SINGLE_GC BOOL demote_gen1_p;
     PER_HEAP_FIELD_SINGLE_GC uint8_t* last_gen1_pin_end;
 
@@ -3672,11 +3675,11 @@ private:
     // need to deduct the size from free_list_space.
     // Note that we should really move this and the free_list_space
     // accounting into the alloc_list class.
-    PER_HEAP_FIELD_SINGLE_GC size_t gen2_removed_no_undo;
+    PER_HEAP_FIELD_SINGLE_GC size_t gen2_removed_no_undo; // reset to 0 @top@plan_phase
 
 #define INVALID_SAVED_PINNED_PLUG_INDEX ((size_t)~0)
 
-    PER_HEAP_FIELD_SINGLE_GC size_t saved_pinned_plug_index;
+    PER_HEAP_FIELD_SINGLE_GC size_t saved_pinned_plug_index; // reset to ~0 @top@plan_phase
 #endif //DOUBLY_LINKED_FL
 
 #ifdef FEATURE_LOH_COMPACTION
@@ -4831,7 +4834,7 @@ inline // init@top@mark_phase = generation_size - dd_fragmentation - [get_genera
   return inst->begin_data_size;
 }
 // reset@top@mark_phase: 0
-// 1. plan phase, += plug_size
+// 1. @plan phase += plug_size 目前的话和g_promoted不同，是准确的。
 inline
  size_t& dd_survived_size (dynamic_data* inst)
 {
@@ -4993,23 +4996,26 @@ alloc_context* generation_alloc_context (generation* inst)
 }
 
 #ifndef USE_REGIONS
-inline
-uint8_t*& generation_allocation_start (generation* inst) // 对于 gen2 看上去是第一个非 readonly seg 的开头object，对于 loh/poh 是对一个seg的开头object，指向mt，而且第一个一定是free object
+inline // 对于 gen2 看上去是第一个非 readonly seg 的开头object，对于 loh/poh 是对一个seg的开头object，指向mt，而且第一个一定是free object
+// 然后，>= 这个的第一个非free obj之前有 32B 的plug_and_gap空间会在plan_phase被写入。也就是说要不这个一开始是个free object，或者segment开头的地方reserve了一个 plug_and_gap 的空间。
+uint8_t*& generation_allocation_start (generation* inst)
 {
   return inst->allocation_start;
 }
 #endif //!USE_REGIONS
-inline
+inline // for <= condemned gen @top@plan_phase
+// [gen0/1] -> allocation_start
+// [gen2] -> _mem(head non-ro segment)
 uint8_t*& generation_allocation_pointer (generation* inst)
 {
   return inst->allocation_context.alloc_ptr;
 }
-inline
+inline // -> generation_allocation_pointer for <= condemned gen @top@plan_phase
 uint8_t*& generation_allocation_limit (generation* inst)
 {
   return inst->allocation_context.alloc_limit;
 }
-inline
+inline // clear <= condemned gen @top@plan_phase
 allocator* generation_allocator (generation* inst)
 {
     return &inst->free_list_allocator;
@@ -5041,13 +5047,13 @@ heap_segment* generation_start_segment_rw (generation* inst)
 }
 #endif //USE_REGIONS
 
-inline
+inline // -> heap_segment_rw(generation_start_segment for <= condemned gen @top@plan_phase
 heap_segment*& generation_allocation_segment (generation* inst)
 {
   return inst->allocation_segment;
 }
 #ifndef USE_REGIONS
-inline
+inline // -> 0 for <= condemned gen @top@plan_phase
 uint8_t*& generation_plan_allocation_start (generation* inst)
 {
   return inst->plan_allocation_start;
@@ -5058,11 +5064,15 @@ size_t& generation_plan_allocation_start_size (generation* inst)
   return inst->plan_allocation_start_size;
 }
 #endif //!USE_REGIONS
-inline // 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
+inline // -> generation_allocation_pointer for <= condemned gen @top@plan_phase
+// 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
 uint8_t*& generation_allocation_context_start_region (generation* inst)
 {
   return inst->allocation_context_start_region;
 }
+
+
+// all following -> 0 for <= condemned gen @top@plan_phase
 inline
 size_t& generation_free_list_space (generation* inst)
 {
@@ -5098,11 +5108,17 @@ size_t&  generation_end_seg_allocated (generation* inst)
 {
     return inst->end_seg_allocated;
 }
+
+
+// [gen0/1] condemned_gen + 1 -> reset to 0 @top@plan_phase
 inline // 只在allocate_in_older_generation中使用，来帮助统计在region end分配了多少空间，不是局部变量只是因为要跨多次调用
 BOOL&  generation_allocate_end_seg_p (generation* inst)
 {
     return inst->allocate_end_seg_p;
 }
+
+
+// all following -> 0 for <= condemned gen @top@plan_phase
 inline
 size_t& generation_condemned_allocated (generation* inst)
 {
@@ -5113,13 +5129,15 @@ size_t& generation_sweep_allocated (generation* inst)
 {
     return inst->sweep_allocated;
 }
+
+
 #ifdef DOUBLY_LINKED_FL
-inline
+inline // [gen1 GC] gen2 -> false @top@plan_phase
 BOOL&  generation_set_bgc_mark_bit_p (generation* inst)
 {
     return inst->set_bgc_mark_bit_p;
 }
-inline
+inline // [gen1 GC] gen2 -> 0 @top@plan_phase
 uint8_t*&  generation_last_free_list_allocated (generation* inst)
 {
     return inst->last_free_list_allocated;
@@ -5193,7 +5211,7 @@ struct plug_and_reloc
     plug        m_plug;
 };
 
-struct plug_and_gap
+struct plug_and_gap // 32B
 {
     ptrdiff_t   gap;
     ptrdiff_t   reloc;
@@ -5612,6 +5630,7 @@ uint8_t*& heap_segment_used (heap_segment* inst)
   return inst->used;
 }
 // 根据 https://github.com/dotnet/runtime/pull/76586 的说法，这个指向的是下一个obj的mt, 也就是上一个obj end 的 sizeof(ObjHeader) 之后。
+// TOCHECK: 尽管指向 sizeof(ObjHeader) 之后，但是 allocated <= reserved
 inline
 uint8_t*& heap_segment_allocated (heap_segment* inst)
 {
@@ -5711,12 +5730,17 @@ uint8_t*& heap_segment_mem (heap_segment* inst)
 {
   return inst->mem;
 }
-inline
+inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@plan_phase
+// [gen0/gen1 GC] ephemeral_heap_segment -> _mem @top@plan_phase
+// [gen2 GC] all segments -> _mem @top@plan_phase
 uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 {
   return inst->plan_allocated;
 }
-inline
+inline // 感觉上是plan phase中会根据plan就该 allocated，这里保存了原来的值，估计是以防选择不compact的时候可以恢复
+// 也就是说在 plan phase 的时候如果需要修改 allocated 就会先 allocated -> saved_allocated
+// 修改的原因有 1: WKS 的时候在plan phase开始的时候有个优化，会丢掉 > shigh(highest mark object) 的object从而加速plug处理
+// 2. 在处理完seg的plug之后，会把allocated设置成 plug_end (待确定具体含义)
 uint8_t*& heap_segment_saved_allocated (heap_segment* inst)
 {
   return inst->saved_allocated;

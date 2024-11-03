@@ -7,8 +7,10 @@ DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DO
 
 additional defined, AMD64, windows:
 FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP, FEATURE_MANUALLY_MANAGED_CARD_BUNDLES
+
+FEATURE_64BIT_ALIGNMENT: arm
 not defined:
-JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF, FEATURE_STRUCTALIGN, SNOOP_STATS
+JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF, FEATURE_STRUCTALIGN, SNOOP_STATS, FREE_USAGE_STATS
 */
 
 //
@@ -15145,7 +15147,7 @@ gc_heap::init_gc_heap (int h_number)
     for (int i = max_generation; i >= 0; i--)
     {
         make_generation (i, seg, start);
-        start += Align (min_obj_size);
+        start += Align (min_obj_size); // Q: 这个不会设置free object MT? 那什么时候设置？ A: set at make_unused_array
     }
 
     heap_segment_allocated (seg) = start;
@@ -19914,9 +19916,9 @@ BOOL gc_heap::should_set_bgc_mark_bit (uint8_t* o)
 }
 #endif //DOUBLY_LINKED_FL
 
-uint8_t* gc_heap::allocate_in_older_generation (generation* gen, size_t size,
-                                                int from_gen_number,
-                                                uint8_t* old_loc REQD_ALIGN_AND_OFFSET_DCL)
+uint8_t* gc_heap::allocate_in_older_generation (generation* gen /* condemned + 1 */, size_t size, // plug size
+                                                int from_gen_number, // active_old_gen_number
+                                                uint8_t* old_loc REQD_ALIGN_AND_OFFSET_DCL) // plug_start
 {
     size = Align (size);
     assert (size >= Align (min_obj_size));
@@ -30162,6 +30164,10 @@ size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
 }
 
 #ifndef USE_REGIONS
+/*
+Allocate min_obj_size in consing_gen -> generation_plan_allocation_start(gen)
+generation_plan_allocation_start_size(gen) \in [min_obj_size, 2 * min_obj_size)
+*/
 void gc_heap::plan_generation_start (generation* gen, generation* consing_gen, uint8_t* next_plug_to_allocate)
 {
 #ifdef HOST_64BIT
@@ -30322,10 +30328,10 @@ void gc_heap::advance_pins_for_demotion (generation* gen)
 }
 
 void gc_heap::process_ephemeral_boundaries (uint8_t* x,
-                                            int& active_new_gen_number,
-                                            int& active_old_gen_number,
-                                            generation*& consing_gen,
-                                            BOOL& allocate_in_condemned)
+                                            int* active_new_gen_number,
+                                            int* active_old_gen_number,
+                                            generation** consing_gen,
+                                            BOOL* allocate_in_condemned)
 {
 retry:
     if ((active_old_gen_number > 0) &&
@@ -31303,6 +31309,10 @@ void gc_heap::store_plug_gap_info (uint8_t* plug_start,
         //dprintf (3, ("last full plug end: %zx, full plug start: %zx", plug_end, plug_start));
         dprintf (3, ("Free: %zx", (plug_start - plug_end)));
         assert ((plug_start == plug_end) || ((size_t)(plug_start - plug_end) >= Align (min_obj_size)));
+// TODO(JJ):start==end的时候，也还是会写入前面24B，说明它对于前面的空间有假设，需要确定。
+//
+// 另外这边有可能覆盖掉 free object 的 mt，Q: 什么时候重新写回 mt?
+// A: windbg ba 显示： make_free_lists > make_free_list_in_brick > thread_gap > make_unused_array
         set_gap_size (plug_start, plug_start - plug_end);
     }
 
@@ -31993,6 +32003,8 @@ uint8_t* gc_heap::find_next_marked (uint8_t* x, uint8_t* end,
         x = end;
         if ((mark_list_next < mark_list_index)
 #ifdef MULTIPLE_HEAPS
+// end = heap_segment_allocated, 而mark list中的 值 < heap_segment_reserved(ephemeral_heap_segment)'
+// 所以比较好奇为什么会有这个判断？理论上不是保守GC，不会出现 >= allocated 的才对。blame显示是initial commit，感觉可能不会发生这个情况。
             && (*mark_list_next < end) //for multiple segments
 #endif //MULTIPLE_HEAPS
             )
@@ -32067,6 +32079,7 @@ inline void save_allocated(heap_segment* seg)
 #pragma warning(push)
 #pragma warning(disable:21000) // Suppress PREFast warning about overly large function
 #endif //_PREFAST_
+// TODO(JJ): plan phase 有类似于 mark_steal 这种 steal机制吗？因为mark object的并发做的限制很低，会有重复，而plan phase发生这种重复就是致命的了，steal机制应该会更难做。
 void gc_heap::plan_phase (int condemned_gen_number)
 {
     size_t old_gen2_allocated = 0;
@@ -32083,9 +32096,9 @@ void gc_heap::plan_phase (int condemned_gen_number)
     dprintf (2,(ThreadStressLog::gcStartPlanMsg(), heap_number,
                 condemned_gen_number, settings.promotion ? 1 : 0));
 
-    generation*  condemned_gen1 = generation_of (condemned_gen_number);
+    generation* /*const*/ condemned_gen1 = generation_of (condemned_gen_number);
 
-    BOOL use_mark_list = FALSE;
+    BOOL use_mark_list = FALSE; // 不同heap可能不同，mark list是当前heap中mark的objects
 #ifdef GC_CONFIG_DRIVEN
     dprintf (3, ("total number of marked objects: %zd (%zd)",
                  (mark_list_index - &mark_list[0]), (mark_list_end - &mark_list[0])));
@@ -32124,14 +32137,21 @@ void gc_heap::plan_phase (int condemned_gen_number)
     }
 
 #ifdef FEATURE_BASICFREEZE
-    sweep_ro_segments();
+    sweep_ro_segments(); // clear mark bit
 #endif //FEATURE_BASICFREEZE
 
+// TODO(JJ): WKS logic
 #ifndef MULTIPLE_HEAPS
     int condemned_gen_index = get_stop_generation_index (condemned_gen_number);
     for (; condemned_gen_index <= condemned_gen_number; condemned_gen_index++)
     {
         generation* current_gen = generation_of (condemned_gen_index);
+// 这里根据 slow, shigh 去做两件优化，减少一些后面需要访问的garbage：
+// 1. 是在把 [mem, slow) 这个确定全是garbage的空间标记成unused array。但是不会把 generation_allocation_start 的 min free obj 包括进去，因为需要保持这个是min size obj
+//    不过有个疑惑就是处理plug的时候会立马把这两个free合并，所以保持的意义是？感觉没必要。或者还是防止破环 generation 之间的间隔？
+// 2. 根据 slow, shigh 判断一个 seg 是不是全是garbage，是的话把 allocated = mem, 使得 seg 为空。
+//    这里好像不会特殊处理 ephemeral_heap_segment 所以对于 eph 也是可以把 allocated 设置成 mem 的吗？ // TODO(JJ): A:
+// 感觉上是一种优化？因为mark的时候是有可能walk through的，所以这里的object结构应该没有问题，所以也不是结构破环了要修复。那应该就是优化，使得后面可以一步跳过这些garbage
         if (shigh != (uint8_t*)0)
         {
             heap_segment* seg = heap_segment_rw (generation_start_segment (current_gen));
@@ -32143,7 +32163,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                 heap_segment_saved_allocated(seg) = 0;
                 if (in_range_for_segment (slow, seg))
                 {
-                    uint8_t* start_unmarked = 0;
+                    uint8_t* start_unmarked = 0; // 第一个非 allocation_start 的 free objects
 #ifdef USE_REGIONS
                     start_unmarked = heap_segment_mem (seg);
 #else //USE_REGIONS
@@ -32166,7 +32186,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
                     if (start_unmarked)
                     {
-                        size_t unmarked_size = slow - start_unmarked;
+                        size_t unmarked_size = slow - start_unmarked; // >= 0 because in_range_for
 
                         if (unmarked_size > 0)
                         {
@@ -32231,7 +32251,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                 {
                     // no survivors make all generations look empty
                     uint8_t* o = generation_allocation_start (current_gen);
-                    o += get_soh_start_obj_len (o);
+                    o += get_soh_start_obj_len (o); // 为啥这里又要保留一个 free object 了？和上面 "// test if the segment ..." 不是很统一啊。但感觉都是优化应该无关紧要，// TODO(JJ): 有空可以测试一下。
                     start_unmarked = o;
                 }
 #endif //!USE_REGIONS
@@ -32278,13 +32298,41 @@ void gc_heap::plan_phase (int condemned_gen_number)
     size_t  sequence_number = 0;
     uint8_t*  last_node = 0;
     size_t  current_brick = brick_of (x);
-    BOOL  allocate_in_condemned = ((condemned_gen_number == max_generation)|| // 感觉是说是不是还allocate在原来的gen
+/*
+初始状态：
+                            gen0            gen0            gen1            gen1            gen2
+                            promote:false   promote:true    promote:false   promote:true    promote:true
+condemned_gen1              0               0               1               1               2
+allocate_in_condemned(init) true            false           true            false           true
+active_old_gen_number(init) 0               0               1               1               2
+active_new_gen_number(init) 0               1               1               2               2
+consing_gen(init)           0               0               1               1               2
+older_gen                   1               1               2               2               NULL
+
+process_ephemeral_boundaries:
+                            gen1            gen1            gen2
+                            promote:false   promote:true    promote:true
+condemned_gen1              1               1               2
+allocate_in_condemned       true            false->true     true
+active_old_gen_number       1->0            1->0            2->1->0
+active_new_gen_number       1->0            2->1            2->2->1
+consing_gen                 1               1               2->2->2/1(*1)
+older_gen                   2               2               NULL
+
+*1: 当 generation_allocation_segment(gen2) == ephemeral_heap_segment, consing_gen = 2 otherwise 1
+    // TODO(JJ): 这个还要看看 allocation_segment 的变化pattern，但给我的感觉是compact之后看原来eph那部分gen2是否还有老gen2的内容，没有的话gen1会直接从eph的_mem开始
+
+when allocate_in_older_generation failed:
+allocate_in_condemned -> true
+*/
+    // 这个主要是来区分是否需要使用 free list 来分配空间还是在分配空间的时候可以直接从头开始放起来。
+    BOOL  allocate_in_condemned = ((condemned_gen_number == max_generation)|| // 感觉是说marked object是不是还allocate在原来的gen // TODO(JJ): 当condemnned == 2 的时候，如果切换到了gen0/1的seg，因为就该需要promote，这个是代码中有几处把这个设置成true的地方吗？
                                    (settings.promotion == FALSE));
-    int  active_old_gen_number = condemned_gen_number;
-    int  active_new_gen_number = (allocate_in_condemned ? condemned_gen_number:
+    int  active_old_gen_number = condemned_gen_number; // marked object 的 gen
+    int  active_new_gen_number = (allocate_in_condemned ? condemned_gen_number: // GC之后该marked object的gen
                                   (1 + condemned_gen_number));
 
-    generation*  older_gen = 0;
+    generation*  older_gen = 0; // [gen2] 0, [gen0/1] 恒为condemned_gen+1
     generation* consing_gen = condemned_gen1;
     alloc_list  r_free_list [MAX_SOH_BUCKET_COUNT];
 
@@ -32397,7 +32445,9 @@ void gc_heap::plan_phase (int condemned_gen_number)
     int  condemned_gn = condemned_gen_number;
 
     int bottom_gen = 0;
+#ifdef FREE_USAGE_STATS
     init_free_and_plug();
+#endif
 
     while (condemned_gn >= bottom_gen)
     {
@@ -32433,7 +32483,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
         if (generation_start_segment (condemned_gen2) != ephemeral_heap_segment)
         {
             generation_allocation_pointer (condemned_gen2) =
-                heap_segment_mem (generation_allocation_segment (condemned_gen2));
+                heap_segment_mem (generation_allocation_segment (condemned_gen2)); // 尚不确定这个一定是什么，但是debug一次的结果看起来是gen2倒数第二个seg,也就是eph前面一个seg
         }
         else
         {
@@ -32497,15 +32547,20 @@ void gc_heap::plan_phase (int condemned_gen_number)
     bool fire_pinned_plug_events_p = EVENT_ENABLED(PinPlugAtGCTime);
 #endif //FEATURE_EVENT_TRACE
 
-    size_t last_plug_len = 0;
+    size_t last_plug_len = 0; // useless
 
 #ifdef DOUBLY_LINKED_FL
     gen2_removed_no_undo = 0;
     saved_pinned_plug_index = INVALID_SAVED_PINNED_PLUG_INDEX;
 #endif //DOUBLY_LINKED_FL
 
-    while (1)
+    while (1) // TODO(JJ): 这里应该这处理了 soh， loh/poh在哪里处理？
     {
+/*
+@init
+x = generation_allocation_start(condemned)
+end = heap_segment_allocated (seg1)`
+*/
         if (x >= end)
         { // 这一个region处理完了
             if (!use_mark_list)
@@ -32653,32 +32708,37 @@ void gc_heap::plan_phase (int condemned_gen_number)
         uint8_t* last_pinned_plug = 0;
         size_t num_pinned_plugs_in_plug = 0;
 
-        uint8_t* last_object_in_plug = 0;
+        uint8_t* last_object_in_plug = 0; // current plug中最后一个 object
 
         while ((x < end) && marked (x)) // 这个while考虑的应该是连续的non-pin,pin。需要考虑的有artifact pin导致的多个plug组成的pin plug
-        {
+        { // 找到了一个新的plug start，开始scan一个新的plug，已经处理这个plug。
+/*
+1. last_npinned_plug_p = false, last_pinned_plug_p = false
+初始状态，会往x前面的gap写入gap size
+
+tricks:
+[1]: pinned plug 之后一个object如果是mark，会extend plug
+[2]: gen2 如果一个plug很大，但是移动的距离很近，会把plug pin住，而不是移动。
+// TODO(JJ): [2]
+*/
             uint8_t*  plug_start = x;
-            uint8_t*  saved_plug_end = plug_end;
-            BOOL   pinned_plug_p = FALSE;
-            BOOL   npin_before_pin_p = FALSE; // 当前case是non-pin obj紧随pin obj
+            uint8_t*  saved_plug_end = plug_end; // 在seg开头是 generation_allocation_start / heap_segment_mem，之后是上一个 plug 的 exclusive end
+            BOOL   pinned_plug_p = FALSE; // CURRENT plug pinned?
+            BOOL   npin_before_pin_p = FALSE; // 当前plug是non-pin，紧随pin obj
             BOOL   saved_last_npinned_plug_p = last_npinned_plug_p;
             uint8_t*  saved_last_object_in_plug = last_object_in_plug;
             BOOL   merge_with_last_pin_p = FALSE;
 
-            size_t added_pinning_size = 0; // pin plug后面紧随的obj的size
+            size_t added_pinning_size = 0; // pin plug后面紧随的marked obj的size
             size_t artificial_pinned_size = 0;
 
             store_plug_gap_info (plug_start, plug_end, last_npinned_plug_p, last_pinned_plug_p,
                                  last_pinned_plug, pinned_plug_p, last_object_in_plug,
                                  merge_with_last_pin_p, last_plug_len);
 
-#ifdef FEATURE_STRUCTALIGN
-            int requiredAlignment = ((CObjectHeader*)plug_start)->GetRequiredAlignment();
-            size_t alignmentOffset = OBJECT_ALIGNMENT_OFFSET;
-#endif // FEATURE_STRUCTALIGN
-
-            { // 判定当前plug的范围，处理了pin的几种case，包括对于pin后紧随non-pin的时候扩展plug
+            { // 确定当前plug的范围 [plug_start, plug_end), 判断是否是pin followed by nonpin / nonpin followed by pin
                 uint8_t* xl = x;
+                
                 while ((xl < end) && marked (xl) && (pinned (xl) == pinned_plug_p))
                 {
                     assert (xl < end); // 逗小孩的assert吗
@@ -32686,23 +32746,12 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     {
                         clear_pinned (xl);
                     }
-#ifdef FEATURE_STRUCTALIGN
-                    else
-                    {
-                        int obj_requiredAlignment = ((CObjectHeader*)xl)->GetRequiredAlignment();
-                        if (obj_requiredAlignment > requiredAlignment)
-                        {
-                            requiredAlignment = obj_requiredAlignment;
-                            alignmentOffset = xl - plug_start + OBJECT_ALIGNMENT_OFFSET;
-                        }
-                    }
-#endif // FEATURE_STRUCTALIGN
 
                     clear_marked (xl);
 
                     dprintf(4, ("+%zx+", (size_t)xl));
                     assert ((size (xl) > 0));
-                    assert ((size (xl) <= loh_size_threshold)); // TODO: 奇怪，什么时候排除了condemend==2的可能性？
+                    assert ((size (xl) <= loh_size_threshold)); // 奇怪，什么时候排除了condemend==2的可能性？ ... gen2也是soh啊。当时在想什么，不过这里是hard code了loh thredshold，当然assert不影响release版本
 
                     last_object_in_plug = xl;
 
@@ -32717,7 +32766,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     // If it is pinned we need to extend to the next marked object as we can't use part of
                     // a pinned object to make the artificial gap (unless the last 3 ptr sized words are all
                     // references but for now I am just using the next non pinned object for that).
-                    if (next_object_marked_p)
+/*[1]*/             if (next_object_marked_p)
                     {
                         clear_marked (xl);
                         last_object_in_plug = xl;
@@ -32734,6 +32783,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
                 assert (xl <= end);
                 x = xl;
+                
             }
             dprintf (3, ( "%zx[", (size_t)plug_start));
             plug_end = x;
@@ -32744,7 +32794,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
             if (!pinned_plug_p)
             { // TODO
-                if (allocate_in_condemned &&
+/*[2]*/         if (allocate_in_condemned &&
                     (settings.condemned_generation == max_generation) &&
                     (ps > OS_PAGE_SIZE))
                 {
@@ -32760,10 +32810,10 @@ void gc_heap::plan_phase (int condemned_gen_number)
                                      (size_t)plug_start, reloc));
                         // The last plug couldn't have been a npinned plug or it would have
                         // included this plug.
-                        assert (!saved_last_npinned_plug_p);
+                        assert (!saved_last_npinned_plug_p); // TODO(JJ): 什么意思？ saved_last_npinned_plug_p 只有上一个是紧接的吗？不包括中间夹一个free object?
 
                         if (last_pinned_plug)
-                        {//所以最近的这个while循环时预期pin/non-pin交替的吗？然后一旦有gap就会跳出到再外面一个while
+                        {//所以最近的这个while循环时预期pin/non-pin交替的吗？然后一但有gap就会跳出到再外面一个while
                             dprintf (3, ("artificially pinned plug merged with last pinned plug"));
                             merge_with_last_pin_p = TRUE;
                         }
@@ -32781,7 +32831,17 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
 #ifndef USE_REGIONS
             if (allocate_first_generation_start)
-            {
+            { // TODO(JJ): 以下是我的猜测，对于gen2或者是gen0/1的non-promotion GC，对应的gen的seg是完全重建的，这个说的是第一次往condemned gen里面去放object，估计是有些特殊逻辑
+// ~~然后关于consing_gen，给我一种感觉就是比如gen1 non-promotion，如果gen1没有存活的object，consing_gen就会变成 gen0，但要验证。~~
+/*
+首先，consing_gen的变更一定只会发生在 process_ephemeral_boundaries, 意味着一定发生在这之后，所以这里 consing_gen 一定是初始值即 == condemned_gen1
+看上去这里主要是在 generation_allocation_pointer 上面分配一个 min_obj_size
+更新的一些字段，详细含义待确定
+generation_allocation_limit (gen) = heap_segment_plan_allocated (seg) = heap_segment_committed (seg)
+generation_allocation_context_start_region = generation_plan_allocation_start(condemned_gen1) = _mem(head non-ro segment)
+generation_plan_allocation_start_size \in [min_obj_size, 2 * min_obj_size)
+generation_allocation_pointer += generation_plan_allocation_start_size
+*/
                 allocate_first_generation_start = FALSE;
                 plan_generation_start (condemned_gen1, consing_gen, plug_start);
                 assert (generation_plan_allocation_start (condemned_gen1));
@@ -32789,10 +32849,12 @@ void gc_heap::plan_phase (int condemned_gen_number)
 
             if (seg1 == ephemeral_heap_segment)
             {
-                process_ephemeral_boundaries (plug_start, active_new_gen_number,
-                                              active_old_gen_number,
-                                              consing_gen,
-                                              allocate_in_condemned);
+// 判断object是否更改了gen，更改了的话要去更新 active_new_gen, active_old_gen etc.
+// TODO(JJ): 这里面还要一些其他的更改，对其他字段有更多了解之后可以再看一眼。
+                process_ephemeral_boundaries (plug_start, &active_new_gen_number,
+                                              &active_old_gen_number,
+                                              &consing_gen,
+                                              &allocate_in_condemned);
             }
 #endif //!USE_REGIONS
 
@@ -32810,7 +32872,9 @@ void gc_heap::plan_phase (int condemned_gen_number)
                 dd_num_npinned_plugs (dd_active_old)++;
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
 
+#ifdef FREE_USAGE_STATS
                 add_gen_plug (active_old_gen_number, ps);
+#endif
 
                 if (allocate_in_condemned)
                 {
@@ -32829,7 +32893,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
                     verify_pins_with_post_plug_info("after aic");
                 }
                 else
-                {
+                { // 这里面assert了 older_gen == generation_of(active_old_gen_number+1)
                     new_address = allocate_in_older_generation (older_gen, ps, active_old_gen_number, plug_start REQD_ALIGN_AND_OFFSET_ARG);
 
                     if (new_address != 0)

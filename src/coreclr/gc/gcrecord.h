@@ -306,7 +306,7 @@ enum gc_mechanism_per_heap
 
 enum gc_mechanism_bit_per_heap
 {
-    gc_mark_list_bit = 0,
+    gc_mark_list_bit = 0, // 这个 heap 在这个 GC 有没有使用 mark list 加速 plan phase?
     gc_demotion_bit = 1,
     max_gc_mechanism_bits_count = 2
 };
