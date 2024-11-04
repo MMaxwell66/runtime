@@ -5253,7 +5253,7 @@ struct loh_padding_obj
 };
 // 根据 reloc 大胆猜测，LOH的移动是把移动的差值记录在reloc里面，然后扫描的过程中检查每个object对应的 loh_padding 里面的 reloc, != 0 就意味着要reloc，就把插值加到 object pointer 上面去。
 // 前半段推断是正确的，后半段不对，这个是结合brick table在修改pointer的时候快速查找offset用的。
-#define loh_padding_obj_size (sizeof(loh_padding_obj))
+#define loh_padding_obj_size (sizeof(loh_padding_obj)) /* 32B */
 
 //flags description
 #define heap_segment_flags_readonly     1
@@ -5625,6 +5625,7 @@ uint8_t*& heap_segment_decommit_target (heap_segment* inst)
     return inst->decommit_target;
 }
 inline
+// [LOH]: 在GC过程中会被设置成 plan_allocated - 8, 而且只增不减（除非是decommit，会设置成new committed）而且没怎么似乎没怎么被用到？需要确认由于什么地方了。
 uint8_t*& heap_segment_used (heap_segment* inst)
 {
   return inst->used;

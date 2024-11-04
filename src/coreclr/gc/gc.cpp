@@ -1784,7 +1784,8 @@ void memclr ( uint8_t* mem, size_t size)
     assert (sizeof(PTR_PTR) == DATA_ALIGNMENT);
     memset (mem, 0, size);
 }
-
+// 这个不确定为什么这么写，反正实际上得到的assembly很差，里面的手动unfold都被反向优化成立每次迭代一次。（毕竟考虑到memory aliasing的可能性（当然这里不可能发生，因为compact phase reloc逻辑的原因），compiler没法优化也很正常）
+// 难道是为了什么原子性之类的？不过就算是原子性这种，生成的assembly也完全是有优化空间的，不知道为什么没有做更进一步的优化，是因为这个不是主要的overhead?
 void memcopy (uint8_t* dmem, uint8_t* smem, size_t size)
 {
     const size_t sz4ptr = sizeof(PTR_PTR)*4;
@@ -30687,7 +30688,7 @@ retry:
             }
 
             if (generation_allocation_limit (gen) != heap_segment_plan_allocated (seg))
-            {
+            { // Q: 什么情况下会发生这个？我debug下用GCPerfSim试了下断点没命中的，感觉应该不会有这个情况，limit != plan_allocated的应该只有可能是上面一个if里面的 == pinned_plug
                 generation_allocation_limit (gen) = heap_segment_plan_allocated (seg);
                 dprintf (1235, ("l->pa(%p)", generation_allocation_limit (gen)));
             }
@@ -30810,7 +30811,41 @@ void gc_heap::check_loh_compact_mode (BOOL all_heaps_compacted_p)
         }
     }
 }
+/* 非 compact 的处理是在 sweep_uoh_objects
 
+before:
+1. heap_segment_plan_allocated reset -> [0]: _mem + min_obj_size, [1..]: _mem
+2. [generation_allocation_pointer, generation_allocation_limit) => [seg#0_mem+min_obj_size, seg#0_mem+min_obj_size)
+generation_allocation_segment = seg#0
+
+整体流程是这样的，去扫objects，如果是normal就去 [allocation_pointer, allocation_limit) 中最前面分配一块空间，如果是pinned就enqueue到list中去，然后核心的allocation_ptr/limit的调整逻辑如下：
+一开始空的，然后是这样变化的
+- 首先第一次从空的，变成 [pointer不变, limit变为 committed)
+- 然后如果遇到了 pinned_plug，会变成 [pointer不变，limit变为pinned_plug_start)，然后如果这个allocation space耗尽了，再变为 [pinned_plug_end, 原来的limit)
+  当然一个seg里面可能有多个pinned_plug基本思路是一样的，出现一个pinned_plug就会把 allocation space 切成 pinned_plug 前后两端。
+  这个切的逻辑是由 `loh_set_allocator_next_pin` 函数负责，看一下调用方就比较清楚它怎么维护这个逻辑的。 (*1)
+- 然后如果一个segment commit space也用尽了，会去尝试 commit reserved space(有可能因为alloc的时候用了更大的长度，导致最后有一些大小之前没有尝试commit就知道不够用了，但是因为compact移动之后，没有commit的大小有够用了，就会出现再compact的时候commit)
+- reserve也不行的，就会把 generation_allocation_segment 切到下一个 segment, 并把 [ptr, limit) => [_mem, _mem) 然后重复上面的逻辑。
+
+每个 normal large object 之前的 gap 是 32B，但是 pinned_plug 之前的 gap 会更大，具体多大是存在了 loh_piunned_queue 的 pinned_len 中
+然后处理完之后，每个 heap_segment 的 plan_allocated 会变成 reloc 之后的 nomarl object 最后一个 object end (no gap) 和 pinned object end (no gap) 中的最大者。
+[allocation_pointer, allocation_limit) => [0, 0)
+
+*1: plan_loh 会维护一个所有 pinned large object 的 list，如果这个list空间不够就会强制sweep。
+    另外你可能会好奇为什么不用环状queue，这是因为虽然这里字面上市dequeue但是后面compact_loh的时候还是需要这个所有pinned的list（理论上有这个其实可以clear pinned bit了，下面有个注释说这个pinned bit需要保留用于compact_loh，但其实那里的assert已经指明了信息是有一定重复的。
+*2 : 也就是说 normal object 的顺序是保持的，不会说前面某个 pinned obj 前面有空间可以插入就会插过去。
+比如:
+```
+var obj1 = new long[100_000];
+var obj2 = new long[85_000];
+var obj3 = new long[120_000];
+var obj4 = new long[90_000];
+obj1 = null;
+fixed obj2;
+GC.KeepAlive(obj3); GC.KeepAlive(obj4);
+// obj4 不会 reloc 到 obj1 的位置上去。
+```
+*/
 BOOL gc_heap::plan_loh()
 {
 #ifdef FEATURE_EVENT_TRACE
@@ -30824,7 +30859,7 @@ BOOL gc_heap::plan_loh()
 
     if (!loh_pinned_queue)
     {
-        loh_pinned_queue = new (nothrow) (mark [LOH_PIN_QUEUE_LENGTH]);
+        loh_pinned_queue = new (nothrow) (mark [LOH_PIN_QUEUE_LENGTH]); // 其实 loh 没有用到 mark 的所有字段，可以优化一点空间。
         if (!loh_pinned_queue)
         {
             dprintf (1, ("Cannot allocate the LOH pinned queue (%zd bytes), no compaction",
@@ -30835,7 +30870,7 @@ BOOL gc_heap::plan_loh()
         loh_pinned_queue_length = LOH_PIN_QUEUE_LENGTH;
     }
 
-    loh_pinned_queue_decay = LOH_PIN_DECAY;
+    loh_pinned_queue_decay = LOH_PIN_DECAY; // 是说如果后面这么多次 GC 没有触发 loh compact 就会把上面的 loh_pinned_queue 的空间 free 掉
 
     loh_pinned_queue_tos = 0;
     loh_pinned_queue_bos = 0;
@@ -30975,7 +31010,13 @@ BOOL gc_heap::plan_loh()
 
     return TRUE;
 }
-
+// - 会去segment tail空间较大的时候，会去decommit
+// - 如果非 start_segment 空间为空的时候，会插到 freeable_uoh_segment 的链表头
+//
+// >= 48B 的 free object 会加入到 generation_allocator 中，并 += free_list_space (不会 += free_obj_space)
+// < 48B 的 free object 只会 += free_obj_space
+// heap_segment_allocated = heap_segment_plan_allocated = max([object_end for all relocated_object], [object_end for all pinned object])
+// 更新 heap_segment_used，这个比较奇怪，详见自身的comments，需要看看用于什么目的才能理解。
 void gc_heap::compact_loh()
 {
     assert (loh_compaction_requested() || heap_hard_limit || conserve_mem_setting);
@@ -30995,9 +31036,6 @@ void gc_heap::compact_loh()
     heap_segment* prev_seg = 0;
     uint8_t* o             = get_uoh_start_object (seg, gen);
 
-    // We don't need to ever realloc gen3 start so don't touch it.
-    uint8_t* free_space_start = o;
-    uint8_t* free_space_end = o;
     generation_allocator (gen)->clear();
     generation_free_list_space (gen) = 0;
     generation_free_obj_space (gen) = 0;
@@ -31062,7 +31100,6 @@ void gc_heap::compact_loh()
 
         if (marked (o))
         {
-            free_space_end = o;
             size_t size = AlignQword (size (o));
 
             size_t loh_pad;
@@ -31073,7 +31110,7 @@ void gc_heap::compact_loh()
             {
                 // We are relying on the fact the pinned objects are always looked at in the same order
                 // in plan phase and in compact phase.
-                mark* m = loh_pinned_plug_of (loh_deque_pinned_plug());
+                mark* m = loh_pinned_plug_of (loh_deque_pinned_plug()); // 这里依赖于 plan_loh 中已经找到的所有pinned loh objects list
                 uint8_t* plug = pinned_plug (m);
                 assert (plug == o);
 
@@ -31091,7 +31128,6 @@ void gc_heap::compact_loh()
             thread_gap ((reloc - loh_pad), loh_pad, gen);
 
             o = o + size;
-            free_space_start = o;
             if (o < heap_segment_allocated (seg))
             {
                 assert (!marked (o));
@@ -35450,7 +35486,9 @@ void gc_heap::make_unused_array (uint8_t* x, size_t size, BOOL clearp, BOOL rese
         //
         uint8_t * tmp = x + size_as_object;
         size_t remaining_size = size - size_as_object;
-
+// (sizeH * 2^32 + sizeL) - (((sizeH * 2^32 + sizeL) - 24) % 2^32 + 24) = sizeH * 2^32 + sizeL - (sizeL - 24) % 2^32 - 24
+// = sizeH * 2^32 (if sizeL >= 24) = (sizeH-1) * 2^32 (if sizeL < 24, sizeH > 0)
+// 以上两点保证此时 remaining_size >= 24，从而不会出问题
         while (remaining_size > UINT32_MAX)
         {
             // Make sure that there will be at least Align(min_obj_size) left
@@ -35459,7 +35497,7 @@ void gc_heap::make_unused_array (uint8_t* x, size_t size, BOOL clearp, BOOL rese
 
             ((CObjectHeader*)tmp)->SetFree(current_size);
 
-            remaining_size -= current_size;
+            remaining_size -= current_size; // > 7+24
             tmp += current_size;
         }
 
@@ -36746,7 +36784,7 @@ void gc_heap::copy_cards_range (uint8_t* dest, uint8_t* src, size_t len, BOOL co
     if (copy_cards_p)
         copy_cards_for_addresses (dest, src, len);
     else
-        clear_card_for_addresses (dest, dest + len); // 为什么不直接clear整个card呢，想memset少一点？
+        clear_card_for_addresses (dest, dest + len); // 为什么不直接clear整个card呢，想memset少一点？ // 不知道之前是对有什么有疑问？这里只有确保card整个在range内才回去clear，只要有一个byte不在copy范围内去不能去clear
 }
 
 // POPO TODO: We should actually just recover the artificially made gaps here..because when we copy
@@ -40554,7 +40592,7 @@ void gc_heap::clear_cards (size_t start_card, size_t end_card)
                   end_card, (size_t)card_address (end_card)));
     }
 }
-
+// 两边向内缩小
 void gc_heap::clear_card_for_addresses (uint8_t* start_address, uint8_t* end_address)
 {
     size_t   start_card = card_of (align_on_card (start_address));
@@ -46320,7 +46358,11 @@ void gc_heap::background_sweep()
     dprintf (GTC_LOG, ("---- (GC%zu)ESw ----", VolatileLoad(&settings.gc_index)));
 }
 #endif //BACKGROUND_GC
-
+/*
+- generation_free_list_allocated -> 0: 这个是 compact 里面没有清零的，不知道会不会有问题 // TODO(JJ): 
+- generation_allocation_segment -> start_segment: 这个也是 compact 里面没有设置的。 // TODO(JJ): 
+- 其他的 freeable_uoh_segment, free_list_space, free_obj_space 和 compact_loh 相同。
+*/
 void gc_heap::sweep_uoh_objects (int gen_num)
 {
     //this min value is for the sake of the dynamic tuning.
