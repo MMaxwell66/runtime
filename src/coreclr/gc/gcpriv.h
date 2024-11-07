@@ -187,7 +187,7 @@ inline void FATAL_GC_ERROR()
 #define SHORT_PLUGS //used to keep ephemeral plugs short so they fit better into the oldest generation free items
 
 #ifdef SHORT_PLUGS
-#define DESIRED_PLUG_LENGTH (1000)
+#define DESIRED_PLUG_LENGTH (1000) /* 好多plugs relocate到了一起，其中第一个前面会有一个 gap pad，这个大小是包括了这个pad的 */
 #endif //SHORT_PLUGS
 
 #define FEATURE_PREMORTEM_FINALIZATION
@@ -1407,7 +1407,7 @@ enum interesting_data_point
     idp_pre_short = 0,
     idp_post_short = 1,
     idp_merged_pin = 2,
-    idp_converted_pin = 3,
+    idp_converted_pin = 3, // 如果一个object之后紧跟一个pinned，object relocate diff 
     idp_pre_pin = 4,
     idp_post_pin = 5,
     idp_pre_and_post_pin = 6,
@@ -2448,7 +2448,7 @@ private:
     PER_HEAP_METHOD void adjust_ephemeral_limits();
     PER_HEAP_METHOD void make_generation (int gen_num, heap_segment* seg, uint8_t* start);
 
-#define USE_PADDING_FRONT 1
+#define USE_PADDING_FRONT 1 /* to generation != 2 的时候每数个 plugs (合起来1000B) 前面会留一个 min_obj_size 的 gap */
 #define USE_PADDING_TAIL  2
 
     PER_HEAP_METHOD BOOL size_fit_p (size_t size REQD_ALIGN_AND_OFFSET_DCL, uint8_t* alloc_pointer, uint8_t* alloc_limit,
@@ -4848,12 +4848,14 @@ inline
 }
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
 // reset@top@mark_phase: 0
+// size of pinned plugs, 包括了因为正好跟在pinned objects后面的normal object的size，即 dd_added_pinned_size
 inline
 size_t& dd_pinned_survived_size (dynamic_data* inst)
 {
   return inst->pinned_survived_size;
 }
 // reset@top@mark_phase: 0
+// size of normal objects pinned due to just following pinned plug
 inline
 size_t& dd_added_pinned_size (dynamic_data* inst)
 {
@@ -5066,6 +5068,8 @@ size_t& generation_plan_allocation_start_size (generation* inst)
 #endif //!USE_REGIONS
 inline // -> generation_allocation_pointer for <= condemned gen @top@plan_phase
 // 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
+// TODO(JJ): check assertion 至少在 plan_phase 主while过程中，值指向的是一个object (GC前) 的 start，也就是说 (value, value + 24) 范围内不会存在下一个 object 的 start pointer
+// WIP: allocaiton internal 重置到 pinned plug 的时候会 reset 到 pinned plug end
 uint8_t*& generation_allocation_context_start_region (generation* inst)
 {
   return inst->allocation_context_start_region;
@@ -5614,7 +5618,7 @@ uint8_t*& heap_segment_reserved (heap_segment* inst)
 {
   return inst->reserved;
 }
-inline
+inline // TODO(JJ): 见 plan_generation_start 的 TODO, 需要确认对于eph这个和 generation_allocation_start(generation_of(0)) 之间的差值的最小值/范围。
 uint8_t*& heap_segment_committed (heap_segment* inst)
 {
   return inst->committed;
@@ -5731,8 +5735,8 @@ uint8_t*& heap_segment_mem (heap_segment* inst)
 {
   return inst->mem;
 }
-inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@plan_phase
-// [gen0/gen1 GC] ephemeral_heap_segment -> _mem @top@plan_phase
+inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@plan_phase // 也就是先剔除掉末尾的allocation interval
+// [gen0/gen1 GC] ephemeral_heap_segment -> _mem @top@plan_phase // 这些就是默认先情况，但是对于 gen0/gen1 eph会有 gen2 的objects, 这些的空间一开始也被clear了。
 // [gen2 GC] all segments -> _mem @top@plan_phase
 uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 {
