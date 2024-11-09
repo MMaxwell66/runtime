@@ -5067,9 +5067,20 @@ size_t& generation_plan_allocation_start_size (generation* inst)
 }
 #endif //!USE_REGIONS
 inline // -> generation_allocation_pointer for <= condemned gen @top@plan_phase
-// 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
-// TODO(JJ): check assertion 至少在 plan_phase 主while过程中，值指向的是一个object (GC前) 的 start，也就是说 (value, value + 24) 范围内不会存在下一个 object 的 start pointer
-// WIP: allocaiton internal 重置到 pinned plug 的时候会 reset 到 pinned plug end
+/*
+ 有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
+ TODO(JJ): ~~check assertion 至少在 plan_phase 主while过程中，值指向的是一个object (GC前) 的 start，也就是说 (value, value + 24) 范围内不会存在下一个 object 的 start pointer~~
+   不对，在gen0/1中，比如下面的例子，就会不在object start了
+```
+pinned
+32 free
+1024 obj
+24 free
+24 obj
+```
+
+WIP: allocaiton internal 重置到 pinned plug 的时候会 reset 到 pinned plug end
+*/
 uint8_t*& generation_allocation_context_start_region (generation* inst)
 {
   return inst->allocation_context_start_region;

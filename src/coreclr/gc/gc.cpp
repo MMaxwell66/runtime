@@ -20586,6 +20586,21 @@ heap_segment* gc_heap::get_next_alloc_seg (generation* gen)
 }
 // 这里的可用空间是通过如下逻辑查找：从region头按顺序开始，找到下一个pin plug, pin plug前面这段空间就是可用的。猜测思路是我们按顺序plan，前面的plug已经被reloc了，后面的plug的位置不会超过自己原来的位置。
 // 有一个有问题的点是判断空间是否够用的size_fit_p会考虑padding的事情，这个额外的pad会不会导致上面关于plug reloc不会超过之前的位置这个assert失败？感觉有个pad有可能就是gap？所以不会出问题？有需要可以debug一下看看。
+/*
+总结一下这里的逻辑，总的来说是把 plug 一个一个的放到 [allocation_pointer, allocation_limit) 的头部 => [new_address, new_address+size)[new_allocation_pointer, allocation_limit)
+然后有几个点：
+- 我称 [pointer, limit) 为 allocation interval, 这个 interval 的范围是这样得到的, 1. [generation_start, heap_committed) 2. 当 committed 不够了会扩展到 heap_reserved
+  3. 当遇到 pinned plug 的时候，原有的 interval 会被切分成两个 intervals [allocation_pointer, pinned_plug_start) + [pinned_plug_end, allocation_limit), 当然多个 pinned 就切成多个 intervals
+- non-pinned plug 会一个个放到 allocation_pointer 的位置上去，有几个细点：
+  - 如果 interval 空间不够了，就会移动到下一个interval (committed->reserved, reserved->next_seg, interval_before_pinned->interval_after_pinned)
+    代码的逻辑确保这个 interval 不会超过原来的位置，从而 new_adress <= old_loc
+    当移动到下一个的时候，之前的interval会被直接discard，即就算之后有合适大小的plug能够放入到之前discard的interval也不会放回去，而是放到已经走到下一段的interval里面去了。
+    （这一点揭示了pinned，尤其是 pinned + large_size_plug 会容易浪费空间，导致fragment）
+  - 当在gen0/1中分配的时候，会尝试插入 min_obj 的pad来避免出现够多太大的plug影响到时候promote到gen2的分配。这个pad大致在每 DESIRED_PLUG_LENGTH (1000B) 会插入。插入的时候会额外检测两点：
+    - 插入 pad 不应该导致 new_address > old_loc, 见下方 `if (dist == 0)`
+    - 插入 pad 不应该导致出现 < 24 的空间导致无法插入 free object，这个会发生在 allocation interval 逼近一个 pinned plug 时，plug分配之后导致 [new_address, pinned_plug_start) < 24.
+      这个的时候会使pad变大，从而令plug紧贴pinned plug，这个情况被 idp_converted_pin 统计。
+*/
 uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen,
                                                   size_t size,
                                                   int from_gen_number,
@@ -20631,6 +20646,20 @@ retry:
     {
         heap_segment* seg = get_next_alloc_seg (gen);
 // TODO(JJ): 对于 gen0/1 因为有 pad front 所以这里的 check 要求 limit - pointer 至少 >= size + 24，这就引出一个问题，当 limit == committed 的时候这个能保证 24 吗？还是说这个是 next_seg == 0, return 0 那里的情况？
+/*
+我不确定 reserve 和 generation_allocated 之间的大小有什么关系，但是我们明确的是会出现 allocation_pointer = old_loc, old_loc + size == generation_allocated，于是下面的验证变成了
+  limit - ptr >= 24 + size <=> reserved/committed - old_ptr >= 24 + size <=> reserved/commited >= 24 + generation_allocated
+这个我不确实是否一定为 true, 我在尝试repro但是因为当 allocated 接近 reserved 时 ephemeral 很容易 expand 容易不太容易 repro
+不过我们可以看到的是下面 next_seg 的 check 中允许了 next_seg == null, 会 return 0。也就是说代码handle了上述check == false的情况。
+我们首先可以确定的是如果 size_fit_p 在 ephemeral_heap_segment.reserved 时都返回 false，那么 old_loc 一定是最后一个非 pinned plug。
+证明：
+ - pined plug 不用说，都不会进入这个code path
+ - 如果不是最后一个，意味着后面存在至少一个 garbage / marked object，所以 reserved >= allocated >= old_loc + size + garbage_or_mark_size = old_loc + size + 24
+     <=> reserved - limit >= reserved - old_loc >= size + 24 所以 size_fit_p 在 limit == reserved 的时候一定返回 true
+所以这个函数 return 0 并且 convert_to_pinned_p == false 一定发生在最后一个nonpinned plug上面。
+// TODO(JJ): 接下来这个我还没有验证，但是看起来这种情况下面后续的 should_expand check 一定会return true 所以会发生 ephemeral_heap_segment expand 而不是简单的 reloc 所以这里也不是要管了。
+  虽然我感觉直接return old_loc也不是不可以吧。
+*/
         if (! (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, generation_allocation_pointer (gen),
                            generation_allocation_limit (gen), old_loc,
                            ((generation_allocation_limit (gen) != heap_segment_plan_allocated (seg))?USE_PADDING_TAIL:0)|pad_in_front)))
@@ -20668,9 +20697,17 @@ retry:
 
                 dprintf (3, ("mark stack bos: %zd, tos: %zd, aic: p %p len: %zx->%zx",
                     mark_stack_bos, mark_stack_tos, plug, len, pinned_len (pinned_plug_of (entry))));
-
+/*
+下面这个 assert 的证明：
+这个assert等价于说 allocation_limit - allocation_pointer == 0 || >= 24
+根据下面提到的核心assertion I，我们知道 pointer == some_pinned_plug_end || pointer == some_plug_reloc_end
+如果 == some_pinned_plug_end 那么两个 pinned_plug要不相接（第一眼可能觉得不可能，但其实如果是 pinned, marked, pinned, 然后 marked被extend到pinned中去，好像就有可能了）,此时 .len == 0
+  要不两者中存在objects，此时 len >= 24
+如果 == some_plug_reloc_end，考虑这个plug last object 的原始位置，如果和pinned plug相接，那么由下面的 `idp_converted_pin` 那里的逻辑保证了 .len == 0 || >= 24
+  如果不想接，那么至少存在一个garbage object在pinned plug之前，所以 .len >= 24
+*/
                 assert(mark_stack_array[entry].len == 0 ||
-                       mark_stack_array[entry].len >= Align(min_obj_size)); // set_new_pin_info里能确保这个吗？ // TODO(JJ): 这个其实很有意思，感觉应该是 size_fit_p 之类的保证的估计和 pad_tail 相关，可以好好看看这个是哪里保证了的。
+                       mark_stack_array[entry].len >= Align(min_obj_size));
                 generation_allocation_pointer (gen) = plug + len;
                 generation_allocation_context_start_region (gen) = generation_allocation_pointer (gen);
                 generation_allocation_limit (gen) = heap_segment_plan_allocated (seg);
@@ -20794,10 +20831,24 @@ retry:
         }
     }
 
-// TODO(JJ): assertion: result <= old_loc 如果在同一个 seg 内。应该可以用递归证明，首先前一个满足的话, 两者 + len保证 ptr <= prev_end,
-// 然后上面的调整不发生的话，就有 old_loc >= prev_end >= ptr, 如果上面发生了 pinned 调整，由plan的顺序说明 pin_end <= old_loc, 而 ptr = pin_end <= old_loc。
-// 当然这个是很简单的讨论，因为涉及到的地方很多，所以详细的证明会很麻烦，但基本思路应该就是这样。
-// 然后之前考虑的一个说 short plug 插入 gap 会不会导致出先问题。如果有pad一定是过了下面的 dist == 0 的check，所以可以保证 pad 不会破坏假设。
+/*
+㊟㊟㊟ 准备好，下面这里存在很多 assertion 而且都不那么好证明。
+首先，核心的 assertion 是 allocation_pointer 要不等于 "前一个 marked object relocate 之后的新 end" 要不等于 "一个在 old_loc 之前的 pinned objected end"
+  （注意，接下来的很多之前都是首先考虑 heap_segment next 然后考虑 segment 内部前后顺序）
+  这个 assertion 还没详细验证，毕竟涉及到的修改代码段太多了，没打算细看。不过上面 size_fit_p 的逻辑和下面 relocate 的逻辑基本能保证这一点。
+
+第二个核心的assertion: result <= old_loc, ('<='包括了segment next < 的含义)
+  使用数学归纳法
+  old_loc >= max(prev_pinned_object_end, prev_object_end) >= max(prev_pinned_object_end, prev_object_relocated_end) >= allocation_pointer
+
+额外补充的一些分析：
+如果在同一个 seg 内。应该可以用递归证明，首先前一个满足的话, prev_result+prev_len <= prev_old_loc+prev_len <=> ptr <= prev_object_end,
+然后上面的调整不发生的话，就有 old_loc >= prev_object_end >= ptr, 如果上面发生了 pinned 调整，由plan的顺序说明 pin_end <= old_loc, 而 ptr = pin_end <= old_loc。
+当然这个是很简单的讨论，因为涉及到的地方很多，所以详细的证明会很麻烦，但基本思路应该就是这样。
+然后之前考虑的一个说 short plug 插入 gap 会不会导致出先问题。如果有pad一定是过了下面的 dist == 0 的check，所以可以保证 pad 不会破坏假设。详细见下方 comment
+
+// TODO(JJ): 详细验证这两个核心的 assertion
+*/
     {
         assert (generation_allocation_pointer (gen)>=
                 heap_segment_mem (generation_allocation_segment (gen)));
@@ -20815,7 +20866,18 @@ retry:
                 pad = 0;
             }
             else
-            { // context_start_region 的值都是一个 object start 的位置，而 old_loc 也是一个 object start 所以两者要不相同，要不就差至少 min_obj_size
+            {
+/*
+~~context_start_region 的值都是一个 object start 的位置，而 old_loc 也是一个 object start 所以两者要不相同，要不就差至少 min_obj_size~~ 这个证明是错的，start_region不一定是object start,反例见 start_region 定义上方comment
+这个证明分几种情况讨论
+1. object 之前没有遇到过 pinned object
+  递归，对于第一个 object 因为 generation_start free object 这个 dist 一定 >= 24
+  之后的plug前面一定有一个free object(不然就并入上一个plug了)，因为 ptr == prev_reloc_end <= prev_end，所以 old_loc - ptr >= 24
+2. 如果 object 前方遇到过 pinned object
+  如果 ptr <= pinned_object, dist >= pinned_len = 24
+  如果 old_loc 是 pinned object 之后第一个，那么要么 dist == 0, 要不 old_loc 和 pinned_end 之间又 garbage object 所以 dist >= 24
+  如果 old_loc 不是 pinned object 之后第一个，那么plug前面存在garbage object, old_loc - ptr >= prev_end + 24 - ptr >= 24
+*/
                 if ((dist > 0) && (dist < (ptrdiff_t)Align (min_obj_size)))
                 {
                     dprintf (1, ("old alloc: %p, only %zd bytes > new alloc! Shouldn't happen", old_loc, dist));
@@ -20839,15 +20901,27 @@ retry:
 #ifdef SHORT_PLUGS
 /*
 首先，这个是为了处理一个 object reloc 之后，它的下一个object是pinned动不了，导致 new object end <-> pinned object start 之间的空间 < 24B 无法放下一个 free object
-Q: 对于 pad != 0 这个条件。如果 pad == 0 就一定不会出现上诉情况吗？
+Q: 对于 pad != 0 这个条件。如果 pad == 0 就一定不会出现上述情况吗？
 A:
 1. 对于gen2，我们可以证明，一个object要不不动，动了的话，移动距离至少 >= 24B。因为没有 gen2 没有 pad，所以很容易用归纳法去证明这件事。
-从而对于 gen2 不会发生 relocated object end <-> nexted pinned object start 空间 < 24B 的情况，因为要不没动 space == 0，要不动了 space >= 24B 可以放下一个 free object。所以对于 gen2 我们不用管这个。
+从而对于 gen2 不会发生 relocated object end <-> nexted pinned object start 空间 \in (0, 24B) 的情况，因为要不没动 space == 0，要不动了 space >= 24B 可以放下一个 free object。所以对于 gen2 我们不用管这个。
 2. 那对于 gen0/1, pad == 0 不会出现讨论的情况吗？
 首先对于 gen0/1  一个object如果动了，至少动 24B 这个是不成立的。比如
 pinned
 32 garbage
 24 obj -> reloc = -8
+那怎么证明呢？
+A: 和 dist == 0 || dist >= 24 一样的进行分类讨论
+- object 之前没有遇到过 pinned object
+  - 如果是gen第一个object, 拿reloc == 0 || reloc == prev_garbage_len >= 24，所以后面的空间 == 0 || >= 24
+  - 如果不是gen第一个object, reloc = old_loc - (prev_reloc_end + pad) = (pad != 0的情况由下面的if去检测空间大小) = old_loc - prev_reloc_end >= old_loc - prev_end = garbage_between_plug >= 24
+- object 之前遇到过 pinned object
+  - 如果 ptr <= pinned_object, 这个gap甚至没进入allocation interval，不用考虑
+  - 如果 object 是 pinned object 之后第一个，那么 pad == 0 <==> old_loc == pinned_object_end, 此时 reloc == 0, 所以后面的空间 == 0
+  - 如果 object 不是 pinned object 之后第一个，那么 old_loc - (ptr + pad) = (pad != 0 由 if 去检测) = old_loc - ptr = old_loc - prev_reloc_end >= old_loc - prev_end
+      = garbage_between_plug >= 24 所以后面空间一定 >= 24
+至此证明了当 pad == 0 的时候，一定不会出现上述情况。所以我们可以在if条件中加入 pad != 0
+3. 这边还有一点就是我们考虑的是 next_pinned_plug，那么如果 allocation_limit == some_pinned_plug_start 我们不用防止同样的问题出现吗？答案是不用，因为这个时候 size_fit_p 会 pad_tail 可以保证不生成这个情况。
 */
         if ((next_pinned_plug != 0) && (pad != 0) && (generation_allocation_segment (gen) == current_seg))
         {
@@ -32938,8 +33012,9 @@ generation_allocation_pointer += generation_plan_allocation_start_size
                         allocate_in_condemned_generations (consing_gen,
                                                            ps,
                                                            active_old_gen_number,
-#ifdef SHORT_PLUGS
-                                                           &convert_to_pinned_p, // 这个convert的情况好像是如果new addr导致和下一个pin plug之间gap但是不够一个obj就不去移动当前plug
+#ifdef SHORT_PLUGS // 这个convert的情况是如果new reloc addr导致和下一个pin plug之间gap<min_obj_size情况下，我们选择不reloc，从而reloc==0, 于是可以看作是pinned。
+ // 注意我们是选择了不reloc，详见内部的comment，简单来说这个不是说reloc==0就会有convert==true, 如果我们有一些assertion保证了和下一个pin plug之间的空间 == 0 || >= 24 我们完全不会去测试 reloc 也就不会 convert
+                                                           &convert_to_pinned_p,
                                                            (npin_before_pin_p ? plug_end : 0),
                                                            seg1,
 #endif //SHORT_PLUGS
@@ -32999,10 +33074,11 @@ generation_allocation_pointer += generation_plan_allocation_start_size
                 {
                     if (!new_address)
                     { // 什么意思，没法找到新地址是合法情况？
+// A: 见 allocate_in_condemned_generations 中 size_fit_p 上面的注释，简单来说是当最后一个 plug 的时候，因为size_fit_p考虑了额外的pad所以会有可能找不到新地址。但这个时候预期（or肯定）会发生 heap expand，所以没关系。
                         //verify that we are at then end of the ephemeral segment
                         assert (generation_allocation_segment (consing_gen) ==
                                 ephemeral_heap_segment);
-                        //verify that we are near the end
+                        //verify that we are near the end // 下述两个 assertion 是矛盾的，至少有一个会失败，所以估计他们也没有测试过这个情况。毕竟这个很容易被 eph expand 和 alloc context 破环掉成立条件。
                         assert ((generation_allocation_pointer (consing_gen) + Align (ps)) <
                                 heap_segment_allocated (ephemeral_heap_segment));
                         assert ((generation_allocation_pointer (consing_gen) + Align (ps)) >
