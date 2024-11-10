@@ -1147,9 +1147,10 @@ public:
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
     //total object size after a GC, ie, doesn't include fragmentation
     size_t    current_size;
-    // 当前这个gen的GC的次数，对于gen0是所以的GC次数，但对于higher gen来说，有可能小于younger gen.
+    // 当前这个gen的GC的次数，对于gen0是所有GC的次数，但对于higher gen来说，有可能小于younger gen.
     // 所以拿到GC次数的一个方法是 `dd_collection_count(dynamic_data_of(0))`
     // Q: 为什么不用gen0的gc_clock还是用collection_count还是说都一样?
+    // BGC 和 gen2 公用这个 count
     // update@update_collection_counts(top@gc1)
     size_t    collection_count;
     size_t    promoted_size;                // 一个使用是用于计算 GetGCMemoryInfo // Q: BGC会修改这个值吗？还是说应该是SINGLE_GC_ALLOC所以只有在pause阶段BGC才会动这里的数据？
@@ -3643,8 +3644,11 @@ private:
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_low; // lowest address being condemned
     PER_HEAP_FIELD_SINGLE_GC uint8_t* gc_high; // highest address being condemned
 
+// demotion 只会发生在 pinned plug 上面。当一个 gen 所有的 non-pinned object 都reloc之后，在之后的所有 pinned_plug 都会被 demotion
+// note: 如果是promote GC, new_gen == old_gen 也是 demotion
     PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_low; // reset to ~0 @top@plan_phase
     PER_HEAP_FIELD_SINGLE_GC uint8_t* demotion_high; // reset to eph_seg allocated @top@plan_phase
+// 如果一个 gen1 promote 只是因为 card_low 才发生，会把所有 gen1 pinned 都 promote 不允许demote, 不过实际上还是会有一些额外的启发性check，pinned 占的原来/存活大小比例，见 advance_pins_for_demotion 中的两个比例值
     PER_HEAP_FIELD_SINGLE_GC BOOL demote_gen1_p;
     PER_HEAP_FIELD_SINGLE_GC uint8_t* last_gen1_pin_end;
 
@@ -3948,6 +3952,7 @@ private:
     PER_HEAP_FIELD_DIAG_ONLY gc_history_per_heap gc_data_per_heap;
 
     // TODO! This is not updated for regions and should be!
+// 如果使用 compact, 在强制 promote gen1 pinned plug 之前，会有多少 pinned plug compact 到当前 gen
     PER_HEAP_FIELD_DIAG_ONLY size_t maxgen_pinned_compact_before_advance;
 
     // For dprintf in do_pre_gc
@@ -4847,8 +4852,8 @@ inline
   return inst->num_npinned_plugs;
 }
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
-// reset@top@mark_phase: 0
-// size of pinned plugs, 包括了因为正好跟在pinned objects后面的normal object的size，即 dd_added_pinned_size
+// reset@top@mark_phase: 0, += plug_len @during@plan_phase
+// size of 当前gen存活的 pinned plugs, 包括了因为正好跟在pinned objects后面的normal object的size，即 dd_added_pinned_size
 inline
 size_t& dd_pinned_survived_size (dynamic_data* inst)
 {
@@ -4999,7 +5004,10 @@ alloc_context* generation_alloc_context (generation* inst)
 
 #ifndef USE_REGIONS
 inline // 对于 gen2 看上去是第一个非 readonly seg 的开头object，对于 loh/poh 是对一个seg的开头object，指向mt，而且第一个一定是free object
+// 这个 free object 对于 loh/poh 一定是 24B 但是对于 uoh 这个不一定是 24B，有可能在 [24B, 48B)，见 `plan_generation_start`
 // 然后，>= 这个的第一个非free obj之前有 32B 的plug_and_gap空间会在plan_phase被写入。也就是说要不这个一开始是个free object，或者segment开头的地方reserve了一个 plug_and_gap 的空间。
+// during@plan_phase 要求 keep value
+// after@plan_phase 会从 generation_plan_allocation_start update this
 uint8_t*& generation_allocation_start (generation* inst)
 {
   return inst->allocation_start;
@@ -5056,6 +5064,9 @@ heap_segment*& generation_allocation_segment (generation* inst)
 }
 #ifndef USE_REGIONS
 inline // -> 0 for <= condemned gen @top@plan_phase
+// 见一个调用了 object_gennum_plan 地方的comments。对于gen0 promote GC，会使用到 gen1 的 generation_plan_allocation_start，但这个值没有动过，还是上一个 GC 留下来的值。
+// 关键是这个留下来的值是用于 compact GC 的，如果上一个 GC 是 sweep GC 会导致其值和 allocation_start 不同。
+// 这时候 object_gennum_plan 依赖于 generation_plan_allocation_start <= allocation_start 所以这是一个强数据依赖，很危险。
 uint8_t*& generation_plan_allocation_start (generation* inst)
 {
   return inst->plan_allocation_start;
@@ -5108,7 +5119,9 @@ size_t& generation_pinned_allocation_sweep_size (generation* inst)
 {
     return inst->pinned_allocation_sweep_size;
 }
-inline
+inline // reset -> 0 for all gen <= condemned gen @top@plan_phase
+// during@plan_phase, 如果使用 compact, 会有多少 pinned plug compact 到当前 gen
+// reset -> 0 for all gen <= condemned gen + 1 @after@plan_phase(total) 实际上可以认为 <= 2 因为 gen0 不会去动 gen2 的值
 size_t& generation_pinned_allocation_compact_size (generation* inst)
 {
     return inst->pinned_allocation_compact_size;
@@ -5647,6 +5660,7 @@ uint8_t*& heap_segment_used (heap_segment* inst)
 }
 // 根据 https://github.com/dotnet/runtime/pull/76586 的说法，这个指向的是下一个obj的mt, 也就是上一个obj end 的 sizeof(ObjHeader) 之后。
 // TOCHECK: 尽管指向 sizeof(ObjHeader) 之后，但是 allocated <= reserved
+// @plan_phase 当这个segment的object走完之后，这个会被reset到最后一个marked object end
 inline
 uint8_t*& heap_segment_allocated (heap_segment* inst)
 {
@@ -5749,6 +5763,7 @@ uint8_t*& heap_segment_mem (heap_segment* inst)
 inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@plan_phase // 也就是先剔除掉末尾的allocation interval
 // [gen0/gen1 GC] ephemeral_heap_segment -> _mem @top@plan_phase // 这些就是默认先情况，但是对于 gen0/gen1 eph会有 gen2 的objects, 这些的空间一开始也被clear了。
 // [gen2 GC] all segments -> _mem @top@plan_phase
+// during plug planning allocate_in_condemned: 第一次碰到一个seg会->committed，离开seg->allocation_pointer
 uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 {
   return inst->plan_allocated;
@@ -5756,7 +5771,7 @@ uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 inline // 感觉上是plan phase中会根据plan就该 allocated，这里保存了原来的值，估计是以防选择不compact的时候可以恢复
 // 也就是说在 plan phase 的时候如果需要修改 allocated 就会先 allocated -> saved_allocated
 // 修改的原因有 1: WKS 的时候在plan phase开始的时候有个优化，会丢掉 > shigh(highest mark object) 的object从而加速plug处理
-// 2. 在处理完seg的plug之后，会把allocated设置成 plug_end (待确定具体含义)
+// 2. 在处理完seg的plug之后，会把allocated设置成 plug_end (seg上最后一个marked object end)
 uint8_t*& heap_segment_saved_allocated (heap_segment* inst)
 {
   return inst->saved_allocated;

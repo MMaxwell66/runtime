@@ -20601,7 +20601,7 @@ heap_segment* gc_heap::get_next_alloc_seg (generation* gen)
     - 插入 pad 不应该导致出现 < 24 的空间导致无法插入 free object，这个会发生在 allocation interval 逼近一个 pinned plug 时，plug分配之后导致 [new_address, pinned_plug_start) < 24.
       这个的时候会使pad变大，从而令plug紧贴pinned plug，这个情况被 idp_converted_pin 统计。
 */
-uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen,
+uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen, // allocation interval 所属于的 gen
                                                   size_t size,
                                                   int from_gen_number,
 #ifdef SHORT_PLUGS
@@ -20704,7 +20704,8 @@ retry:
 如果 == some_pinned_plug_end 那么两个 pinned_plug要不相接（第一眼可能觉得不可能，但其实如果是 pinned, marked, pinned, 然后 marked被extend到pinned中去，好像就有可能了）,此时 .len == 0
   要不两者中存在objects，此时 len >= 24
 如果 == some_plug_reloc_end，考虑这个plug last object 的原始位置，如果和pinned plug相接，那么由下面的 `idp_converted_pin` 那里的逻辑保证了 .len == 0 || >= 24
-  如果不想接，那么至少存在一个garbage object在pinned plug之前，所以 .len >= 24
+  如果不想接，那么至少存在一个garbage object在pinned plug之前，所以 .len >= 24           +----- 这点感觉不全面，除了这个还有一种情况是靠 size_fit_p + pad_tail 保证的
+完善一下assertion，assert可以加强到 ∀ pinned_plug, pinned_plug_start - allocation_pointer \not \in (0, min_obj_size)
 */
                 assert(mark_stack_array[entry].len == 0 ||
                        mark_stack_array[entry].len >= Align(min_obj_size));
@@ -20728,6 +20729,13 @@ retry:
                     // 上面comment让我感觉我对这里可能的处理顺序还是有了解不清楚的地方，有空找些例子看看吧
                     int togn = (in_range_for_segment (plug, seg) ? to_gen_number : object_gennum_plan (plug));
 #else
+/*
+这里有点坑，是这样的，gennum_plan中使用了 gen0/1的generation_plan_allocation_start 对于gen1/2 GC，这两个值会先置0然后在plan_generation_start去设置成值，没有问题。
+但是对于 gen0 promote GC 来说，generation_plan_allocation_start(gen1) 是没有动的，还是上个GC的值，所以在gennum_plan中会去读一个上一个 GC 的值。
+  关键是这个 plan_allocation_start 是 compact GC 用的，如果上一个GC最终是sweep GC，这个值是不会等于 generation_allocation_start(gen1) 的。
+  这会导致处于 [plan_allocation_start, allocation_start) 之间的 object 错误的返回 gennum_plan == 2。不过幸运的是这些 object 不在 gen0 GC 范围内，所以没有问题。
+  但这个前提是 generation_plan_allocation_start(gen1) <= generation_allocation_start(gen1)。就算选择了 sweep GC。这个应该是对的（没证明），毕竟compact不应该expand。
+*/
                     int togn = object_gennum_plan (plug);
 #endif //USE_REGIONS
                     if (frgn < togn)
@@ -20901,6 +20909,7 @@ retry:
 #ifdef SHORT_PLUGS
 /*
 首先，这个是为了处理一个 object reloc 之后，它的下一个object是pinned动不了，导致 new object end <-> pinned object start 之间的空间 < 24B 无法放下一个 free object
+  补充一下，这个assertion可以等价于 ∀ pinned_plug, pinned_plug_start - allocation_pointer \not \in (0, min_obj_size)
 Q: 对于 pad != 0 这个条件。如果 pad == 0 就一定不会出现上述情况吗？
 A:
 1. 对于gen2，我们可以证明，一个object要不不动，动了的话，移动距离至少 >= 24B。因为没有 gen2 没有 pad，所以很容易用归纳法去证明这件事。
@@ -30265,7 +30274,7 @@ generation_plan_allocation_start_size(gen) \in [min_obj_size, 2 * min_obj_size)
 void gc_heap::plan_generation_start (generation* gen, generation* consing_gen, uint8_t* next_plug_to_allocate)
 {
 #ifdef HOST_64BIT
-    // We should never demote big plugs to gen0.
+    // We should never demote big plugs to gen0. // 把大于 6MiB 的 pinned plug 强制 promote
     if (gen == youngest_generation)
     {
         heap_segment* seg = ephemeral_heap_segment;
@@ -30306,7 +30315,7 @@ void gc_heap::plan_generation_start (generation* gen, generation* consing_gen, u
     size_t allocation_left = (size_t)(generation_allocation_limit (consing_gen) - generation_allocation_pointer (consing_gen));
     if (next_plug_to_allocate)
     {//这里就算 next_plug 不在 consing_gen 的 allocation_segment 也没有关系，因为下面的 '>' 一定不会为 true, 为 true 意味着 plug 在 allocation_segment 上。
-    // next_plug 一定是 pinned? 不然考虑它干什么？ // TODO(JJ): 好像是下一个 generation 的开头，那可能是要考虑
+// next_plug 一定是 pinned? 不然考虑它干什么？ A: 下一个 generation 的first marked object
         size_t dist_to_next_plug = (size_t)(next_plug_to_allocate - generation_allocation_pointer (consing_gen));
         if (allocation_left > dist_to_next_plug)
         {
@@ -30315,6 +30324,45 @@ void gc_heap::plan_generation_start (generation* gen, generation* consing_gen, u
     }
     if (allocation_left < Align (min_obj_size))
     {
+/*
+!!! 很关键，说明了 generation_start 不是一定是 24B, 有可能 > 24B!，repro如下：
+gen2:
+24 free
+gen1:
+24 free
+24 free
+24 obj1 pin
+56 garbage
+gen0:
+24 free
+24 obj2 pin
+24 free
+24 obj3
+--- (gen1 promote compact GC)
+gen2:
+24 free
+gen1:
+24 free
+24 free
+24 obj1 pin
+24 free
+24 obj3
+gen0:
+32 free
+24 obj2 pin
+*/
+/*
+理论上你把 generation_start 当作一个 marked object, allocation_interval 中肯定可以找到合适的位置是的不用 check 这个 < min_obj_size，其实就类似 idp_converted_pin
+但是不确定是不是因为不允许一个generation的end是free object?所以强制把这个 free object 往前提了导致会出现后面的空间小于 min_obj_size 需要并入 generation_start 的情况。以上面的repro为例，按照aic里面的逻辑应该会变成
+...
+24 obj1 pin
+24 free
+gen0:
+24 free
+32 free
+24 obj2 pin
+24 obj3
+*/
         generation_plan_allocation_start_size (gen) += allocation_left;
         generation_allocation_pointer (consing_gen) += allocation_left;
     }
@@ -30374,7 +30422,7 @@ void gc_heap::plan_generation_starts (generation*& consing_gen)
     heap_segment_plan_allocated (ephemeral_heap_segment) =
         generation_allocation_pointer (consing_gen);
 }
-
+// 启发式的决定是否把所有 gen1 的 pinned plug promote 到 gen2, 是的话，把allocation_pointer前进到last_gen1_pin_end
 void gc_heap::advance_pins_for_demotion (generation* gen)
 {
     uint8_t* original_youngest_start = generation_allocation_start (youngest_generation);
@@ -30390,12 +30438,14 @@ void gc_heap::advance_pins_for_demotion (generation* gen)
         if ((pin_frag_ratio > 0.15) && (pin_surv_ratio > 0.30))
         {
             while (!pinned_plug_que_empty_p() &&
-                    (pinned_plug (oldest_pin()) < original_youngest_start))
+                    (pinned_plug (oldest_pin()) < original_youngest_start)) // 这个check感觉可以不用，因为现在只处理了gen1/2的plug还没有处理到gen0的
             {
                 size_t entry = deque_pinned_plug();
                 size_t len = pinned_len (pinned_plug_of (entry));
                 uint8_t* plug = pinned_plug (pinned_plug_of(entry));
                 pinned_len (pinned_plug_of (entry)) = plug - generation_allocation_pointer (gen);
+// 因为 ∀ pinned_plug, pinned_plug_start - allocation_pointer \not \in (0, min_obj_size)
+// 证明见 idp_converted_pin 上面 comments
                 assert(mark_stack_array[entry].len == 0 ||
                         mark_stack_array[entry].len >= Align(min_obj_size));
                 generation_allocation_pointer (gen) = plug + len;
@@ -30423,7 +30473,13 @@ void gc_heap::advance_pins_for_demotion (generation* gen)
             gen1_pins_left, total_space_to_skip, (int)(pin_frag_ratio*100), (int)(pin_surv_ratio*100)));
     }
 }
-
+/*
+除了更新 active_old/new_gen_number 以外，会
+- plan_generation_start, relocate 新的 generation start
+- 此时还存在没有被 allocation interval 跨过去的 pinned plug, 这些 pinned plug 就会被demotion到下一个gen, 此时会更新 demotion_low = pinned_plug
+对于 gen1 promote GC 还有
+记录下有多少 gen1的pinned_plug prmote到了gen2，看情况选择是否强制 demote allocation_pointer 之后的 pinned plug。即 demote_gen1_p == false 的含义。
+*/
 void gc_heap::process_ephemeral_boundaries (uint8_t* x,
                                             int* active_new_gen_number,
                                             int* active_old_gen_number,
@@ -30492,7 +30548,7 @@ retry:
                             total_num_pinned_free_spaces_left));
             }
 #endif //FREE_USAGE_STATS
-
+// 把所有非 ephemeral segment 的 pinned plug 都处理掉，advance allocation_pointer, update heap_plan_allocated
             //Go past all of the pinned plugs for this generation.
             while (!pinned_plug_que_empty_p() &&
                    (!in_range_for_segment ((pinned_plug (oldest_pin())), ephemeral_heap_segment)))
@@ -30511,7 +30567,7 @@ retry:
 
                 while (!((plug >= generation_allocation_pointer (consing_gen))&&
                         (plug < heap_segment_allocated (nseg))))
-                {
+                { // 这里如果heap empty了，没有decommit欸 <-- plan phase 谁来给你 decommit, compact 的时候再说吧。
                     //adjust the end of the segment to be the end of the plug
                     assert (generation_allocation_pointer (consing_gen)>=
                             heap_segment_mem (nseg));
@@ -30540,7 +30596,7 @@ retry:
         if (active_new_gen_number != max_generation)
         {
             if (active_new_gen_number == (max_generation - 1))
-            {
+            {// 虽然 gen2 GC, gen1->gen0 的时候也会执行这里，但是第一个值不会用到，第二个值 === true
                 maxgen_pinned_compact_before_advance = generation_pinned_allocation_compact_size (generation_of (max_generation));
                 if (!demote_gen1_p)
                     advance_pins_for_demotion (consing_gen);
@@ -32273,6 +32329,7 @@ void gc_heap::plan_phase (int condemned_gen_number)
 // 这里根据 slow, shigh 去做两件优化，减少一些后面需要访问的garbage：
 // 1. 是在把 [mem, slow) 这个确定全是garbage的空间标记成unused array。但是不会把 generation_allocation_start 的 min free obj 包括进去，因为需要保持这个是min size obj
 //    不过有个疑惑就是处理plug的时候会立马把这两个free合并，所以保持的意义是？感觉没必要。或者还是防止破环 generation 之间的间隔？
+//   !!! 注意一点，这个虽然不包括 min free obj 但是有可能会破换掉下一个 gen 的，比如 gen1 GC, gen1 全是 garbage 就会破环掉 gen0 的 allocation_start
 // 2. 根据 slow, shigh 判断一个 seg 是不是全是garbage，是的话把 allocated = mem, 使得 seg 为空。
 //    这里好像不会特殊处理 ephemeral_heap_segment 所以对于 eph 也是可以把 allocated 设置成 mem 的吗？ // TODO(JJ): A:
 // 感觉上是一种优化？因为mark的时候是有可能walk through的，所以这里的object结构应该没有问题，所以也不是结构破环了要修复。那应该就是优化，使得后面可以一步跳过这些garbage
@@ -32445,8 +32502,7 @@ active_new_gen_number       1->0            2->1            2->2->1
 consing_gen                 1               1               2->2->2/1(*1)
 older_gen                   2               2               NULL
 
-*1: 当 generation_allocation_segment(gen2) == ephemeral_heap_segment, consing_gen = 2 otherwise 1
-    // TODO(JJ): 这个还要看看 allocation_segment 的变化pattern，但给我的感觉是compact之后看原来eph那部分gen2是否还有老gen2的内容，没有的话gen1会直接从eph的_mem开始
+*1: ~~当 generation_allocation_segment(gen2) == ephemeral_heap_segment, consing_gen = 2 otherwise 1~~ 哪个gen其实没有意义，关键是 allocation interval 见变量定义处的注释。
 
 when allocate_in_older_generation failed:
 allocate_in_condemned -> true
@@ -32459,6 +32515,7 @@ allocate_in_condemned -> true
                                   (1 + condemned_gen_number));
 
     generation*  older_gen = 0; // [gen2] 0, [gen0/1] 恒为condemned_gen+1
+// 这个命名非常的蠢，这个就是只是利用了generation去使用了它的 allocation_pointer/limit/segment，其他field全没有（dprint除外）,其实这里的关键是 consing_gen 包括了一个 allocation interval 而这个 interval 是 allocate_in_condemned 当前的分配区间。
     generation* consing_gen = condemned_gen1;
     alloc_list  r_free_list [MAX_SOH_BUCKET_COUNT];
 
@@ -33313,9 +33370,9 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 #endif //!USE_REGIONS
 
     descr_generations ("AP");
-
+#ifdef FREE_USAGE_STATS
     print_free_and_plug ("AP");
-
+#endif
     {
 #ifdef SIMPLE_DPRINTF
         for (int gen_idx = 0; gen_idx <= max_generation; gen_idx++)
