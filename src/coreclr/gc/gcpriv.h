@@ -1405,15 +1405,15 @@ struct no_gc_region_info // 在 prepare_for_no_gc_region 中处理用户输入
 // for BGCs we will have a very different set of datapoints to record.
 enum interesting_data_point
 {
-    idp_pre_short = 0,
-    idp_post_short = 1,
+    idp_pre_short = 0, // pinned plug 前面紧随的一个 plug 的最后一个 object (即saved_pre_plug覆写掉的obj) <= 40B
+    idp_post_short = 1, // pinned plug 后面紧随一个 non pinned plug, 但是 pinned plug 最后一个 non-pinned object size <= 40B
     idp_merged_pin = 2,
     idp_converted_pin = 3, // 如果一个object之后紧跟一个pinned，object relocate diff 
     idp_pre_pin = 4,
     idp_post_pin = 5,
     idp_pre_and_post_pin = 6,
-    idp_pre_short_padded = 7,
-    idp_post_short_padded = 8,
+    idp_pre_short_padded = 7, // idp_pre_short 并且这个 object 是 short plug padded
+    idp_post_short_padded = 8, // idp_post_short 并且这个 object 是 short plug padded
     max_idp_count
 };
 
@@ -4853,7 +4853,7 @@ inline
 }
 #endif //RESPECT_LARGE_ALIGNMENT || FEATURE_STRUCTALIGN
 // reset@top@mark_phase: 0, += plug_len @during@plan_phase
-// size of 当前gen存活的 pinned plugs, 包括了因为正好跟在pinned objects后面的normal object的size，即 dd_added_pinned_size
+// size of 当前gen(pre)存活的 pinned plugs, 包括了因为正好跟在pinned objects后面的normal object的size，即 dd_added_pinned_size
 inline
 size_t& dd_pinned_survived_size (dynamic_data* inst)
 {
@@ -4866,7 +4866,8 @@ size_t& dd_added_pinned_size (dynamic_data* inst)
 {
   return inst->added_pinned_size;
 }
-// reset@top@mark_phase: 0
+// reset@top@mark_phase: 0, 虽然没有pinned,但是决定转化成了pinned的size
+// case1: gen2, > 8 PageSize, reloc < 1/16
 inline
 size_t& dd_artificial_pinned_survived_size (dynamic_data* inst)
 {
@@ -4874,6 +4875,7 @@ size_t& dd_artificial_pinned_survived_size (dynamic_data* inst)
 }
 #ifdef SHORT_PLUGS
 // reset@top@mark_phase: 0
+// during@plan_phase: 如果一个 plug 因为 short_plug 插入了一个 min_obj_size pad, 这个 plug 的 old gen 就会 += min_obj_size
 inline
 size_t& dd_padding_size (dynamic_data* inst)
 {
@@ -5251,14 +5253,14 @@ struct plug_and_gap // 32B
     plug        m_plug;
 };
 
-struct gap_reloc_pair
+struct gap_reloc_pair // 24B
 {
     size_t gap;
     size_t   reloc;
     pair        m_pair;
 };
 // '<' 也就是说最大的obj size是 0x28，应该是保证MT不被overwrite掉
-#define min_pre_pin_obj_size (sizeof (gap_reloc_pair) + min_obj_size)
+#define min_pre_pin_obj_size (sizeof (gap_reloc_pair) + min_obj_size) /* 0x30 = 48B */
 
 struct DECLSPEC_ALIGN(8) aligned_plug_and_gap // 40B
 {

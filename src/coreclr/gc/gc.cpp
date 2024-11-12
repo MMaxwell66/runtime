@@ -7538,20 +7538,22 @@ class mark
 public:
     uint8_t* first; // pin plug start
     size_t len; // pin plug len
-
+// TODO(JJ): 这里 带不带 _reloc 后缀的使用场景的区别是什么？
     // If we want to save space we can have a pool of plug_and_gap's instead of
     // always having 2 allocated for each pinned plug.
-    gap_reloc_pair saved_pre_plug;
+    gap_reloc_pair saved_pre_plug; // 24B pinned plug 前一个 object true range最后 24B，如果包括了 MT, MT 最后的 bits 会全清。
     // If we decide to not compact, we need to restore the original values.
-    gap_reloc_pair saved_pre_plug_reloc;
+    gap_reloc_pair saved_pre_plug_reloc; // 类似 saved_pre_plug，但是MT最后bits没有清零
 
-    gap_reloc_pair saved_post_plug;
+    gap_reloc_pair saved_post_plug; // save之前 saved_post_plug_info_start 处的 24B, 如果包括了MT，末尾bits被清空。
+// use case1: 当一个 pinned plug 遇到紧随的 non-pinned plug 然后 save post，但是后面的 pinned plug 因为是一个被 convert_to_pinned 的plug，
+// 此时会 merge_with_last_pin, 于是前面的 post plug 需要恢复。按理来说直接用 _reloc 恢复就行，但是code里面选择了用 post_plug 虽然这样引入了一些对于 special bit 的 assertion。
 
     // Supposedly Pinned objects cannot have references but we are seeing some from pinvoke
     // frames. Also if it's an artificially pinned plug created by us, it can certainly
     // have references.
     // We know these cases will be rare so we can optimize this to be only allocated on demand.
-    gap_reloc_pair saved_post_plug_reloc;
+    gap_reloc_pair saved_post_plug_reloc; // 不同于 saved_post_plug 的是如果包括了MT, MT末尾bits不会被清空，比如指示插入了short plug pad的mark bit
 
     // We need to calculate this after we are done with plan phase and before compact
     // phase because compact phase will change the bricks so relocate_address will no
@@ -7560,7 +7562,9 @@ public:
 
     // We need to save this because we will have no way to calculate it, unlike the
     // pre plug info start which is right before this plug.
-    uint8_t* saved_post_plug_info_start; // post overwrite start原始地址。说不能算的原因是什么？不是可以根据plug_end算出来的吗？
+// post overwrite start原始地址。说不能算的原因是什么？不是可以根据plug_end算出来的吗？ 在 plan phase 处理到这个的时候，这个的值是 plug_end - 32
+// 是因为 mark.len (原来pinned_plug len) 会被覆盖成 pinned plug 前面后 free space size, 所以不知道 plug_end 了吗？毕竟 pinned bit 已经被 clear 了。
+    uint8_t* saved_post_plug_info_start; 
 
 #ifdef SHORT_PLUGS
     uint8_t* allocation_context_start_region;
@@ -7569,9 +7573,14 @@ public:
     // How the bits in these bytes are organized:
     // MSB --> LSB
     // bit to indicate whether it's a short obj | 4 bits for refs in this short obj | 2 unused bits | bit to indicate if it's collectible | last bit
+/*     +-(31) pinned plug 前面紧随的一个 plug 的最后一个 object (即saved_pre_plug覆写掉的obj) < 48B
+                                                  pre_pinned_plug_last_object collectible class (1)-+
+                                                +-(28-30) pinned_plug - 32 + (i - 28) * 8 is pointer? when pre_short_p
+                                                                                                                      THE saved_pre_p (0)-+
+*/
     // last bit indicates if there's pre or post info associated with this plug. If it's not set all other bits will be 0.
     BOOL saved_pre_p;
-    BOOL saved_post_p;
+    BOOL saved_post_p; // 这里所有的bit有着和 saved_pre_p 相同的含义
 
 #ifdef _DEBUG
     // We are seeing this is getting corrupted for a PP with a NP after.
@@ -7585,7 +7594,7 @@ public:
     }
 
     // pre bits
-    size_t get_pre_short_start_bit ()
+    size_t get_pre_short_start_bit () // 28
     {
         return (sizeof (saved_pre_p) * 8 - 1 - (sizeof (gap_reloc_pair) / sizeof (uint8_t*)));
     }
@@ -7623,7 +7632,7 @@ public:
 #endif //COLLECTIBLE_CLASS
 
     // post bits
-    size_t get_post_short_start_bit ()
+    size_t get_post_short_start_bit () // 28
     {
         return (sizeof (saved_post_p) * 8 - 1 - (sizeof (gap_reloc_pair) / sizeof (uint8_t*)));
     }
@@ -8281,9 +8290,13 @@ void gc_heap::merge_with_last_pinned_plug (uint8_t* last_pinned_plug, size_t plu
         assert (last_pinned_plug == last_m.first);
         if (last_m.saved_post_p)
         {
+// 只有可能是一个pinned plug，紧随一个non-pinned plug，然后这个non-pinned plug > 8 page size, 并且 reloc < ps / 16, gen2 GC, 所以被convert_to_pinned，于是要恢复之前saved post
             last_m.saved_post_p = FALSE;
             dprintf (3, ("setting last plug %p post to false", last_m.first));
             // We need to recover what the gap has overwritten.
+// 这里的 last_m.len 依赖于 allocation interval 还没有跨过 last_m，当着这是肯定的，因为 last_m 之后的所有non-pinned还没有reloc，所以interval肯定还在last_m之前。
+// TODO(JJ): 注意这里copy的是 saved_post_plug，MT的末尾bits是被clear的，虽然它一定reloc==0所以没有 short plug pag mark bit 但不确定 BGC 相关的 bit 状态。
+//   所以这里依赖于这个 object 是没有 special bits 的。暂时是正确的。
             memcpy ((last_m.first + last_m.len - sizeof (plug_and_gap)), &(last_m.saved_post_plug), sizeof (gap_reloc_pair));
         }
         last_m.len += plug_size;
@@ -26758,6 +26771,8 @@ void gc_heap::enque_pinned_plug (uint8_t* plug,
         // Clear these bits for the copy saved in saved_pre_plug, but not for the copy
         // saved in saved_pre_plug_reloc.
         // This is because we need these bits for compaction, but not for mark & sweep.
+// 对于 NGC 可能有 mark bit 表示是否有 short plug pad
+// 对于 FGC/BGC 好像也其它可能的 bit
         size_t special_bits = clear_special_bits (last_object_in_last_plug);
         // now copy the bits over
         memcpy (&(m.saved_pre_plug), &(((plug_and_gap*)plug)[-1]), sizeof (gap_reloc_pair));
@@ -26791,9 +26806,10 @@ void gc_heap::enque_pinned_plug (uint8_t* plug,
             if (contain_pointers (last_object_in_last_plug))
             {
                 dprintf (3, ("short object: %p(%zx)", last_object_in_last_plug, last_obj_size));
-
+// 下面这个 go_through 是不处理 collectible class 的。
                 go_through_object_nostart (method_table(last_object_in_last_plug), last_object_in_last_plug, last_obj_size, pval,
-                    { // 我们不能再saved_pre_plug里面去计算吗？为什么要提前算好？
+                    { // 我们不能再saved_pre_plug里面去计算吗？为什么要提前算好？ // 啥意思？哪里？
+// last_obj_size <= 40B, 所以 最多只有三个 pointer，从而 gap_offset \in [0, 2]
                         size_t gap_offset = (((size_t)pval - (size_t)(plug - sizeof (gap_reloc_pair) - plug_skew))) / sizeof (uint8_t*);
                         dprintf (3, ("member: %p->%p, %zd ptrs from beginning of gap", (uint8_t*)pval, *pval, gap_offset));
                         m.set_pre_short_bit (gap_offset);
@@ -30025,12 +30041,7 @@ void set_node_left_child(uint8_t* node, ptrdiff_t val)
     assert (val > -(ptrdiff_t)brick_size);
     assert (val < (ptrdiff_t)brick_size);
     assert (Aligned (val));
-#ifdef FEATURE_STRUCTALIGN
-    size_t pad = pad_from_short(((plug_and_pair*)node)[-1].m_pair.left);
-    ((plug_and_pair*)node)[-1].m_pair.left = ((short)val << (pad_bits - LOG2_PTRSIZE)) | (short)pad;
-#else // FEATURE_STRUCTALIGN
     ((plug_and_pair*)node)[-1].m_pair.left = (short)val;
-#endif // FEATURE_STRUCTALIGN
     assert (node_left_child (node) == val);
 }
 
@@ -30186,7 +30197,13 @@ void set_gap_size (uint8_t* node, size_t size)
     assert ((size == 0 )||(size >= sizeof(plug_and_reloc)));
 
 }
-// 中序和插入顺序相同的一个二叉构建，插入顺序又等于addr顺序
+/*
+inorder和插入顺序相同的一个二叉构建，插入顺序又等于addr顺序
+设 sequence_number = Sum_{i=0}^{pop_count(sequence_number)} 2^p(i), p(i) > p(i+1)
+则这棵树长成这样：从 root 开始一直往右走，[root, root->right, root->right->right ... ] 到头，总共有 pop(seq) 个节点。
+这个路径上的第 i 个节点 (i 从 0 开始) 的 left 是一颗 depth = p(i) 的完全二叉树。
+根据这一点使用数学归纳法可以证明下面算法的正确性。
+*/
 uint8_t* gc_heap::insert_node (uint8_t* new_node, size_t sequence_number,
                    uint8_t* tree, uint8_t* last_node)
 {
@@ -30228,7 +30245,17 @@ uint8_t* gc_heap::insert_node (uint8_t* new_node, size_t sequence_number,
     }
     return tree;
 }
-
+/*
+1. mark phase 中设置的 brick 值全部都会被覆盖掉。
+2. 和 [generation_allocation_start||heap_segment_mem, heap_segment_allocated) 完全不重叠(任意一个byte都没有重叠)的brick值不会被touch
+3. 否则：
+   - if no live object overlap (any single byte): -1
+   - 如果这个 brick 范围内有任意的 plug_start, val = root tree address - brick_start
+   - 如果这个 brick 范围内没有 plug_start, 但是存在 any byte 属于 live object
+     (此时肯定是某个plug的末尾部分和这个brick重叠)
+     设为 brick x
+     x + brick_val(x) = brick_of(plug_start(brick_address(x)))
+*/
 size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
                                     uint8_t* x, uint8_t* plug_end) // x is new plug start, plug_end is last
 {
@@ -30242,7 +30269,7 @@ size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
         set_brick (current_brick, (tree - brick_address (current_brick)));
     }
     else
-    {
+    { // 只会是开始了一个新的segment，然后开始的brick没有plug, 这时候下面的有 last_br <= current_brick < b, 所以就是把 <= brick_of(x-1) 的置为 -1
         dprintf (3, ("b- %zx->-1", current_brick));
         set_brick (current_brick, -1);
     }
@@ -30259,6 +30286,13 @@ size_t gc_heap::update_brick_table (uint8_t* tree, size_t current_brick,
         }
         else
         {
+/*
+如果 x 不是 brick aligned, current_brick 有可能会在后面重新改写成tree root off
+有一个问题是为什么要在这里设一下-1，反正后面都会重写，有必要吗？比如说我们可以 current_brick = brick_of(x) - 1
+A:~~有一种可能是整个seg全是garbage，这时候 brick_of(x-1) 是不会再写入的。可能我们希望这时候整个segment全是-1?所以才写？~~
+  类似上面但是更有意义的情况，如果这是在segment end的时候调用的那次 update_brick_table，如果用 brick_of(x) - 1 就有可能导致最后一个 brick 没设上
+  比如:  current_brick(init) = 0, last_br = 2, brick_of(x) = 2, 我们希望 brick_of(x) == -2
+*/
             set_brick (b,-1); // free space
         }
         b++;
@@ -31491,13 +31525,13 @@ void gc_heap::store_plug_gap_info (uint8_t* plug_start,
                                    size_t last_plug_len)
 {
     UNREFERENCED_PARAMETER(last_plug_len);
-
+// ⚠️⚠️⚠️ 注意 last_xxx_plug_p 是在 plug 处理的两个 while 中间声明的，也就是说一旦出现 not marked object 这两个就会 reset!
     if (!last_npinned_plug_p && !last_pinned_plug_p)
     {
         //dprintf (3, ("last full plug end: %zx, full plug start: %zx", plug_end, plug_start));
         dprintf (3, ("Free: %zx", (plug_start - plug_end)));
         assert ((plug_start == plug_end) || ((size_t)(plug_start - plug_end) >= Align (min_obj_size)));
-// TODO(JJ):start==end的时候，也还是会写入前面24B，说明它对于前面的空间有假设，需要确定。
+// 这里只有第一个plug才会执行。start==end应该对应于有第一个seg全是garbage，此时写入的是heap_segment.padandplug
 //
 // 另外这边有可能覆盖掉 free object 的 mt，Q: 什么时候重新写回 mt?
 // A: windbg ba 显示： make_free_lists > make_free_list_in_brick > thread_gap > make_unused_array
@@ -31536,6 +31570,7 @@ void gc_heap::store_plug_gap_info (uint8_t* plug_start,
             if (save_pre_plug_info_p)
             {
 #ifdef DOUBLY_LINKED_FL
+// TODO(JJ): 
                 if (last_object_in_last_plug == generation_last_free_list_allocated(generation_of(max_generation)))
                 {
                     saved_pinned_plug_index = mark_stack_tos;
@@ -32240,6 +32275,7 @@ uint8_t* gc_heap::find_next_marked (uint8_t* x, uint8_t* end,
 }
 
 #ifdef FEATURE_EVENT_TRACE
+// gen1 GC, 如果 reloc 使用了 aic 而不是 free list，就会把对应的 size 记录下来
 void gc_heap::init_bucket_info()
 {
     memset (bucket_info, 0, sizeof (bucket_info));
@@ -32750,7 +32786,7 @@ end = heap_segment_allocated (seg1)`
         { // 这一个region处理完了
             if (!use_mark_list)
             {
-                assert (x == end);
+                assert (x == end); // 就算 use_mark_list == true, 应该也是 x == end
             }
 
 #ifdef USE_REGIONS
@@ -32884,18 +32920,17 @@ end = heap_segment_allocated (seg1)`
             }
         }
 
-        BOOL last_npinned_plug_p = FALSE; // 这个last指的是scan完的当前这个plug
+        BOOL last_npinned_plug_p = FALSE; // 这个last在 store_plug_gap_info前值上一个while中的plug，此后指的是这个while的 CURRENT plug
         BOOL last_pinned_plug_p = FALSE;
 
         // last_pinned_plug is the beginning of the last pinned plug. If we merge a plug into a pinned
         // plug we do not change the value of last_pinned_plug. This happens with artificially pinned plugs -
         // it can be merged with a previous pinned plug and a pinned plug after it can be merged with it.
         uint8_t* last_pinned_plug = 0;
-        size_t num_pinned_plugs_in_plug = 0;
 
         uint8_t* last_object_in_plug = 0; // current plug中最后一个 object
 
-        while ((x < end) && marked (x)) // 这个while考虑的应该是连续的non-pin,pin。需要考虑的有artifact pin导致的多个plug组成的pin plug
+        while ((x < end) && marked (x)) // 这个while考虑的是没有gap的连续的plugs。需要考虑的有artifact pin导致的多个plug组成的pin plug
         { // 找到了一个新的plug start，开始scan一个新的plug，已经处理这个plug。
 /*
 1. last_npinned_plug_p = false, last_pinned_plug_p = false
@@ -32912,7 +32947,7 @@ tricks:
             BOOL   npin_before_pin_p = FALSE; // 当前plug是non-pin，紧随pin obj
             BOOL   saved_last_npinned_plug_p = last_npinned_plug_p;
             uint8_t*  saved_last_object_in_plug = last_object_in_plug;
-            BOOL   merge_with_last_pin_p = FALSE;
+            BOOL   merge_with_last_pin_p = FALSE; // 只是说前一个 plug 是不是 pinned, 但是两个 plug 应该不一定相接，这里的 merge 指什么？
 
             size_t added_pinning_size = 0; // pin plug后面紧随的marked obj的size
             size_t artificial_pinned_size = 0;
@@ -32923,7 +32958,6 @@ tricks:
 
             { // 确定当前plug的范围 [plug_start, plug_end), 判断是否是pin followed by nonpin / nonpin followed by pin
                 uint8_t* xl = x;
-                
                 while ((xl < end) && marked (xl) && (pinned (xl) == pinned_plug_p))
                 {
                     assert (xl < end); // 逗小孩的assert吗
@@ -32968,7 +33002,6 @@ tricks:
 
                 assert (xl <= end);
                 x = xl;
-                
             }
             dprintf (3, ( "%zx[", (size_t)plug_start));
             plug_end = x;
@@ -32995,7 +33028,7 @@ tricks:
                                      (size_t)plug_start, reloc));
                         // The last plug couldn't have been a npinned plug or it would have
                         // included this plug.
-                        assert (!saved_last_npinned_plug_p); // TODO(JJ): 什么意思？ saved_last_npinned_plug_p 只有上一个是紧接的吗？不包括中间夹一个free object?
+                        assert (!saved_last_npinned_plug_p); // 前面一定是一个pinned_plug
 
                         if (last_pinned_plug)
                         {//所以最近的这个while循环时预期pin/non-pin交替的吗？然后一但有gap就会跳出到再外面一个while
@@ -33119,12 +33152,12 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 #endif //FEATURE_EVENT_TRACE
 
                 if (convert_to_pinned_p)
-                {
+                { // 发生这个应该只有可能发生在连续的第一个 plug 上，因为不然的话，前面一个一定是 pinned plug，而 convert 是在不考虑下一个 object 情况下 reloc 位置 diff \in (0, min_size_obj)，这说明前面一定不是 pinned, 否则 reloc 之后就重叠了。
                     assert (last_npinned_plug_p != FALSE);
                     assert (last_pinned_plug_p == FALSE);
                     convert_to_pinned_plug (last_npinned_plug_p, last_pinned_plug_p, pinned_plug_p,
                                             ps, artificial_pinned_size);
-                    enque_pinned_plug (plug_start, FALSE, 0); // TODO: 检查这个false的含义
+                    enque_pinned_plug (plug_start, FALSE, 0);
                     last_pinned_plug = plug_start;
                 }
                 else
@@ -33215,7 +33248,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 
             if (!merge_with_last_pin_p)
             {
-                if (current_brick != brick_of (plug_start))
+                if (current_brick != brick_of (plug_start)) // current_brick = brick_of(generation_start||heap_segment_mem) or = brick_of(last_plug_start)
                 {
                     current_brick = update_brick_table (tree, current_brick, plug_start, saved_plug_end);
                     sequence_number = 0;
@@ -33229,7 +33262,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
                 {
                     //dprintf(3,( " Lb"));
                     dprintf (3, ("%p Lb", plug_start));
-                    set_node_left (plug_start);
+                    set_node_left (plug_start); // TODO(JJ): meaning & assertion 尤其是 last_node 和 plug_start 属于不同 segment 的情况
                 }
                 if (0 == sequence_number)
                 {
@@ -33272,10 +33305,6 @@ generation_allocation_pointer += generation_plan_allocation_start_size
             }
         } // 注意这里是个while，也就是连续的mark pin/non-pin会在这个while中处理
 
-        if (num_pinned_plugs_in_plug > 1)
-        {
-            dprintf (3, ("more than %zd pinned plugs in this plug", num_pinned_plugs_in_plug));
-        }
 // （好像并行mark的时候mark list可能有重复项）+前面计算plug的时候是用size走的，这里可能会拿到已经clear的obj,但是上面计算plug的时候有marked的check所以没有问题
         x = find_next_marked (x, end, use_mark_list, mark_list_next, mark_list_index);
     }
