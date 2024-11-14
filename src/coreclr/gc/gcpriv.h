@@ -759,7 +759,7 @@ class alloc_list
     uint8_t* head;
     uint8_t* tail;
 
-    size_t damage_count;
+    size_t damage_count; // 这里list里面有多少item的undo!=empty
 public:
 #ifdef FL_VERIFICATION
     size_t item_count;
@@ -821,7 +821,7 @@ class allocator
     int first_bucket_bits;
     unsigned int num_buckets;
     alloc_list first_bucket;    // the common case, for gen0/gen1, only one bucket
-    alloc_list* buckets;    // buckets[1..]
+    alloc_list* buckets;    // buckets#1..
     int gen_number;
     alloc_list& alloc_list_of (unsigned int bn);
     size_t& alloc_list_damage_count_of (unsigned int bn);
@@ -845,7 +845,7 @@ public:
 
     // skip buckets that cannot possibly fit "size" and return the next one
     // there is always such bucket since the last one fits everything
-    unsigned int first_suitable_bucket (size_t size)
+    unsigned int first_suitable_bucket (size_t size) // size \in range of buckets#ret_val
     {
         // sizes taking first_bucket_bits or less are mapped to bucket 0
         // others are mapped to buckets 0, 1, 2 respectively
@@ -5082,7 +5082,7 @@ size_t& generation_plan_allocation_start_size (generation* inst)
 inline // -> generation_allocation_pointer for <= condemned gen @top@plan_phase
 /*
  有可能的一个作用是看我们已经在这个alloc_context中使用了多少，如果用了太多就需要插入gap以满足short_plug。插入gap后会reset到gap前的位置，以便重置short plug计数
- TODO(JJ): ~~check assertion 至少在 plan_phase 主while过程中，值指向的是一个object (GC前) 的 start，也就是说 (value, value + 24) 范围内不会存在下一个 object 的 start pointer~~
+~~ assertion: 至少在 plan_phase 主while过程中，值指向的是一个object (GC前) 的 start，也就是说 (value, value + 24) 范围内不会存在下一个 object 的 start pointer~~
    不对，在gen0/1中，比如下面的例子，就会不在object start了
 ```
 pinned
@@ -5092,7 +5092,11 @@ pinned
 24 obj
 ```
 
-WIP: allocaiton internal 重置到 pinned plug 的时候会 reset 到 pinned plug end
+WIP: allocaiton internal 重置到 pinned plug 的时候会 reset 到 pinned plug end;
+  如果插入了一个short plug pad, 会重置到pad前
+allocate_in_older 的时候，每次 adjust_limit (但是不是那种commit more space导致两个interval连在一起的情况下)，都会reset到start
+
+// TODO(JJ): Q: 在GC之间怎么维护？因为aio中一开始的interval是没有重置的，但这个时候像是adjust_limit里面似乎依赖这个值
 */
 uint8_t*& generation_allocation_context_start_region (generation* inst)
 {
@@ -5106,12 +5110,12 @@ size_t& generation_free_list_space (generation* inst)
 {
   return inst->free_list_space;
 }
-inline
+inline // 不一定是 free obj < min_free_list, 在 adjust_limit 那里有一个比较莫名的可能是启发式的逻辑，是的这个有可能统计了一些 free object < 72B
 size_t& generation_free_obj_space (generation* inst)
 {
   return inst->free_obj_space;
 }
-inline
+inline // case1: plan phase reloc plug 到 older gen 的时候很给 older_gen += size
 size_t& generation_allocation_size (generation* inst)
 {
   return inst->allocation_size;
@@ -5133,15 +5137,18 @@ size_t&  generation_free_list_allocated (generation* inst)
 {
     return inst->free_list_allocated;
 }
-inline
+inline // 有多少size是 generation_allocate_end_seg_p == true 的时候分配的
 size_t&  generation_end_seg_allocated (generation* inst)
 {
     return inst->end_seg_allocated;
 }
 
 
-// [gen0/1] condemned_gen + 1 -> reset to 0 @top@plan_phase
+// [gen0/1] condemned_gen + 1 -> reset to false @top@plan_phase
 inline // 只在allocate_in_older_generation中使用，来帮助统计在region end分配了多少空间，不是局部变量只是因为要跨多次调用
+// 如果allocation interval是GC前的原interval，那么为false
+// 如果interval是free_list_item，那么为 false
+// 如果是 [plan_allocated, committed), true
 BOOL&  generation_allocate_end_seg_p (generation* inst)
 {
     return inst->allocate_end_seg_p;
@@ -5212,7 +5219,7 @@ size_t generation_unusable_fragmentation (generation* inst)
 // We always use USE_PADDING_TAIL when fitting so items on the free list should be
 // twice the min_obj_size.
 #define min_free_list       (2*min_obj_size)
-#define min_free_item_no_prev  (min_obj_size+sizeof(uint8_t*))
+#define min_free_item_no_prev  (min_obj_size+sizeof(uint8_t*)) /*32B*/
 struct plug
 {
     uint8_t *  skew[plug_skew / sizeof(uint8_t *)]; // ptr, require 8bytes align
@@ -5765,7 +5772,8 @@ uint8_t*& heap_segment_mem (heap_segment* inst)
 inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@plan_phase // 也就是先剔除掉末尾的allocation interval
 // [gen0/gen1 GC] ephemeral_heap_segment -> _mem @top@plan_phase // 这些就是默认先情况，但是对于 gen0/gen1 eph会有 gen2 的objects, 这些的空间一开始也被clear了。
 // [gen2 GC] all segments -> _mem @top@plan_phase
-// during plug planning allocate_in_condemned: 第一次碰到一个seg会->committed，离开seg->allocation_pointer
+// during plug planning allocate_in_condemned: allocation interval第一次碰到一个seg会->committed，离开seg->allocation_pointer
+// 在 gen1 promote, allocate_in_older 如果 free list 中没有找到空间，从 seg 末尾拿 commit 前的空间的话, _allocated -> committed
 uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 {
   return inst->plan_allocated;

@@ -10,7 +10,7 @@ FEATURE_USE_SOFTWARE_WRITE_WATCH_FOR_GC_HEAP, FEATURE_MANUALLY_MANAGED_CARD_BUND
 
 FEATURE_64BIT_ALIGNMENT: arm
 not defined:
-JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF, FEATURE_STRUCTALIGN, SNOOP_STATS, FREE_USAGE_STATS
+JOIN_STATS, SYNCHRONIZATION_STATS, SEG_REUSE_STATS, TRACE_GC, SIMPLE_DPRINTF, FEATURE_STRUCTALIGN, SNOOP_STATS, FREE_USAGE_STATS, FL_VERIFICATION
 */
 
 //
@@ -15655,17 +15655,23 @@ void gc_heap::make_free_obj (generation* gen, uint8_t* free_start, size_t free_s
 
 //used only in older generation allocation (i.e during gc).
 // 处理之前的alloc_context，更新alloc_context
+// case1: [start, limit_size) 是 older_gen 的一个 free list item
+// case2: [plan_allocated, committed), (after adjust_limit plan_allocated -> committed)
 void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
 {
     dprintf (3, ("gc Expanding segment allocation"));
     heap_segment* seg = generation_allocation_segment (gen);
+// TODO(JJ): 感觉对于 free_list_item allocation_limit 不会等于 start（这个可以确定一下）
+// 然后下面这个应该是对应于，case2 之后 limit == plan_allocated == commit, 然后 size_fit 的时候又尝试 commit more space, 这时候 start == limit == plan_allocated == prev_committted
+// 还有其他可能吗？
     if ((generation_allocation_limit (gen) != start) || (start != heap_segment_plan_allocated (seg)))
     {
         if (generation_allocation_limit (gen) == heap_segment_plan_allocated (seg))
-        {
+        { // TODO(JJ): 什么情况会发生这种？ A: 有一种应该是上一个limit是 case2 [old_plan_allocated, committed) 然后 adjust 到一个 free_list_item 或者是 aio 里面的 go back to 逻辑下
             assert (generation_allocation_pointer (gen) >= heap_segment_mem (seg));
             assert (generation_allocation_pointer (gen) <= heap_segment_committed (seg));
-            heap_segment_plan_allocated (generation_allocation_segment (gen)) = generation_allocation_pointer (gen); // Q: 为什么不是limit？ A: free space swallow
+// Q: 为什么不是limit？ A: ~~free space swallow~~ plan_allocated 是 compact GC 之后这个heap的最后一个object end, limit的话就是一个free object end 了
+            heap_segment_plan_allocated (generation_allocation_segment (gen)) = generation_allocation_pointer (gen);
         }
         else
         {
@@ -15677,7 +15683,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
                 dprintf (3, ("filling up hole: %p, size %zx", hole, size));
                 size_t allocated_size = generation_allocation_pointer (gen) - generation_allocation_context_start_region (gen);
 #ifdef DOUBLY_LINKED_FL
-                if (gen->gen_num == max_generation)
+                if (gen->gen_num == max_generation) // TODO(JJ): 这里选择插到 added_alloc_list 的原因是什么，和原来的alloc_list区分开？然后后面可以去做一些别的操作？还是只是为了更好的性能？
                 {
                     // For BGC since we need to thread the max_gen's free list as a doubly linked list we need to
                     // preserve 5 ptr-sized words: SB | MT | Len | Next | Prev
@@ -15685,7 +15691,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
                     // alloc context if that's < 5-ptr sized.
                     //
                     if (allocated_size <= min_free_item_no_prev)
-                    {
+                    { // 如果 allocated_size == 32B, 应该可以不用 set_free_obj_in_compact_bit, 因为 make_free_obj 不会touch object header
                         // We can't make the free object just yet. Need to record the size.
                         size_t* filler_free_obj_size_location = (size_t*)(generation_allocation_context_start_region (gen) +
                                                                           min_free_item_no_prev);
@@ -15722,7 +15728,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
                                 old_loc - saved_plug_and_gap));
                         }
                         size_t offset = old_loc - saved_plug_and_gap;
-                        if (offset < sizeof(gap_reloc_pair))
+                        if (offset < sizeof(gap_reloc_pair)) // 这边依赖于 old_loc 的值不会小于 24B，这个是 null page 根据 .NET 的 null pointer exception 优化是肯定不会的。
                         {
                             // the object at old_loc must be at least min_obj_size
                             assert (offset <= sizeof(plug_and_gap) - min_obj_size);
@@ -15764,7 +15770,8 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
                     if (size >= Align (min_free_list))
                     {
                         if (allocated_size < min_free_item_no_prev)
-                        {
+                        { // TODO(JJ): 这里的目的是？是某种启发式？还是为了让 allocated_size 能和后面一个 free_obj 组合起来在某种情况下重新变为 free_list?
+// 感觉有可能是不能去覆盖掉原来的 free_list_item 的相关字段，像是next这些，因为后面可能要undo，所以不能覆写掉，而 thread_free_item_front 是会去写UNDO到hole - 8的位置，这可能是free_list_slot的位置。
                             if (size >= (Align (min_free_list) + Align (min_obj_size)))
                             {
                                 //split hole into min obj + threadable free item
@@ -15786,7 +15793,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
                         }
                     }
                     else
-                    {
+                    { // make_free_obj不会去写入object header
                         make_free_obj (gen, hole, size);
                     }
                 }
@@ -15969,7 +15976,7 @@ void allocator::unlink_item (unsigned int bn, uint8_t* item, uint8_t* prev_item,
     if (prev_item)
     {
         if (use_undo_p && (free_list_undo (prev_item) == UNDO_EMPTY))
-        {
+        { // alloc_list_head 下不用存undo吗？我猜是用 r_free_list 存了。
             assert (item == free_list_slot (prev_item));
             free_list_undo (prev_item) = item;
             alloc_list_damage_count_of (bn)++;
@@ -19933,7 +19940,7 @@ BOOL gc_heap::should_set_bgc_mark_bit (uint8_t* o)
     }
 }
 #endif //DOUBLY_LINKED_FL
-
+// gen0->gen1 如果 free list 都没有就之间 return 0, 但是 gen1->gen2 会尝试 commit more
 uint8_t* gc_heap::allocate_in_older_generation (generation* gen /* condemned + 1 */, size_t size, // plug size
                                                 int from_gen_number, // active_old_gen_number
                                                 uint8_t* old_loc REQD_ALIGN_AND_OFFSET_DCL) // plug_start
@@ -19978,7 +19985,7 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen /* condemned + 1
             uint8_t* free_list = 0;
             uint8_t* prev_free_item = 0;
 
-            BOOL use_undo_p = !discard_p;
+            BOOL use_undo_p = !discard_p; // gen1->gen2, (当双链表时) bucket# > 0
 
 #ifdef DOUBLY_LINKED_FL
             if (a_l_idx == 0)
@@ -20053,7 +20060,7 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen /* condemned + 1
                 {
                     dprintf (4, ("F:%zx-%zd",
                                     (size_t)free_list, free_list_size));
-
+// 在非64bit下有点诡异，如果 a_l_idx == 0 那么gen2 fit的时候有undo，但是不fit的时候有不会undo，不过因为 prev_free_item == 0 (a_l_idx == 0时)所以没有区别。
                     gen_allocator->unlink_item (a_l_idx, free_list, prev_free_item, use_undo_p);
                     generation_free_list_space (gen) -= free_list_size;
                     assert ((ptrdiff_t)generation_free_list_space (gen) >= 0);
@@ -20078,7 +20085,8 @@ uint8_t* gc_heap::allocate_in_older_generation (generation* gen /* condemned + 1
                     generation_allocate_end_seg_p (gen) = FALSE;
                     goto finished;
                 }
-                // We do first fit on bucket 0 because we are not guaranteed to find a fit there.
+// We do first fit on bucket 0 because we are not guaranteed to find a fit there. // 对于 bucket > 0, 因为上面fsb是 real_size * 2, 所以只要有一个 free_list 就够插入。
+// 感觉能够 assert (a_l_idx == 0) // 大错特错，如果 fsb(real_size) == #bucket - 1 的话也就是说插入到最后一个bucket那么就一定不能保证这一点了。 不过这个 a_l_idx == 0 还是没有必要。
                 else if (discard_p || (a_l_idx == 0))
                 {
                     dprintf (3, ("couldn't use this free area, discarding"));
@@ -20231,7 +20239,7 @@ finished:
         generation_allocation_pointer (gen) += size + pad;
         assert (generation_allocation_pointer (gen) <= generation_allocation_limit (gen));
 
-        generation_free_obj_space (gen) += pad; // pad对应的obj mt还没设置过，是要compact的时候放吗？
+        generation_free_obj_space (gen) += pad; // TODO(JJ): pad对应的obj mt还没设置过，是要compact的时候放吗？
 
         if (generation_allocate_end_seg_p (gen))
         {
@@ -20240,7 +20248,7 @@ finished:
         else
         {
 #ifdef DOUBLY_LINKED_FL
-            if (generation_set_bgc_mark_bit_p (gen))
+            if (generation_set_bgc_mark_bit_p (gen)) // TODO(JJ): 
             {
                 dprintf (2, ("IOM: %p(->%p(%zd) (%zx-%zx)", old_loc, result, pad,
                         (size_t)(&mark_array [mark_word_of (result)]),
@@ -20248,10 +20256,10 @@ finished:
 
                 set_plug_bgc_mark_bit (old_loc);
             }
-
+// 我们要记下reloc到这里的obj原地址，后面的adjust_limit里面又特定情况需要到old_loc上的method table上面去set bit
             generation_last_free_list_allocated (gen) = old_loc;
 #endif //DOUBLY_LINKED_FL
-// plan_phase里面到时有assert older的acontext一开始为空，但是什么时候置空的？
+// plan_phase里面到时有assert older的acontext一开始为空，但是什么时候置空的？// 这个assert在哪里？uoh有置空，但是soh的older_gen确实还没看到什么时候设置的。
             generation_free_list_allocated (gen) += size;
         }
         generation_allocation_size (gen) += size;
@@ -31570,7 +31578,8 @@ void gc_heap::store_plug_gap_info (uint8_t* plug_start,
             if (save_pre_plug_info_p)
             {
 #ifdef DOUBLY_LINKED_FL
-// TODO(JJ): 
+// 见 adjust_limit 里面的特殊情况下的逻辑，简单来说那种情况下我们需要到reloc原object上面去在method table末尾set bit
+// 但是如果 old_loc 时一个被 pinned plug pre plug info 覆盖掉的情况，我们需要set到saved_pre_plug_reloc上去，而不是原位置，原位置已经被gap覆写了
                 if (last_object_in_last_plug == generation_last_free_list_allocated(generation_of(max_generation)))
                 {
                     saved_pinned_plug_index = mark_stack_tos;
