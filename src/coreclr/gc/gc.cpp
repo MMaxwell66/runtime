@@ -2,6 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 /*
+term:
+aic: allocate_in_condemned_generations
+
 不同define的TOREAD:
 DYNAMIC_HEAP_COUNT, BACKGROUND_GC, FEATURE_CARD_MARKING_STEALING, MH_SC_MARK, DOUBLY_LINKED_FL, FEATURE_PREMORTEM_FINALIZATION
 
@@ -2015,7 +2018,7 @@ uint8_t* gc_heap::pad_for_alignment_large (uint8_t* newAlloc, int requiredAlignm
 
 #define END_SPACE_AFTER_GC (loh_size_threshold + MAX_STRUCTALIGN)
 // When we fit into the free list we need an extra of a min obj
-#define END_SPACE_AFTER_GC_FL (END_SPACE_AFTER_GC + Align (min_obj_size))
+#define END_SPACE_AFTER_GC_FL (END_SPACE_AFTER_GC + Align (min_obj_size)) /* 85024 */
 
 #if defined(BACKGROUND_GC) && !defined(USE_REGIONS)
 #define SEGMENT_INITIAL_COMMIT (2*OS_PAGE_SIZE)
@@ -15681,6 +15684,7 @@ void gc_heap::adjust_limit (uint8_t* start, size_t limit_size, generation* gen)
             if (size != 0)
             {
                 dprintf (3, ("filling up hole: %p, size %zx", hole, size));
+// 可以看 maoni PR 里的msg, 这个 start_region 其实不是很准确，但是因为主要考虑的 gen2 不会有 pad, 所以 start_region 确实是 allocation interval 原 start，可以更好的改进
                 size_t allocated_size = generation_allocation_pointer (gen) - generation_allocation_context_start_region (gen);
 #ifdef DOUBLY_LINKED_FL
                 if (gen->gen_num == max_generation) // TODO(JJ): 这里选择插到 added_alloc_list 的原因是什么，和原来的alloc_list区分开？然后后面可以去做一些别的操作？还是只是为了更好的性能？
@@ -15997,7 +16001,7 @@ void allocator::unlink_item (unsigned int bn, uint8_t* item, uint8_t* prev_item,
     if (repair_list)
     {
         if (!use_undo_p)
-        {
+        { // gen2 bucket#0
             free_list_prev (item) = PREV_EMPTY;
         }
     }
@@ -20659,14 +20663,13 @@ uint8_t* gc_heap::allocate_in_condemned_generations (generation* gen, // allocat
 #endif //SHORT_PLUGS
 
     if ((from_gen_number != -1) && (from_gen_number != (int)max_generation) && settings.promotion)
-    { // 这几个记录在older gen的目的是？
+    { // 这几个记录在older gen的目的是？ A: 在多次 gen1 GC 中维护 gen2 的值？
         generation_condemned_allocated (generation_of (from_gen_number + (settings.promotion ? 1 : 0))) += size;
         generation_allocation_size (generation_of (from_gen_number + (settings.promotion ? 1 : 0))) += size;
     }
 retry:
     {
         heap_segment* seg = get_next_alloc_seg (gen);
-// TODO(JJ): 对于 gen0/1 因为有 pad front 所以这里的 check 要求 limit - pointer 至少 >= size + 24，这就引出一个问题，当 limit == committed 的时候这个能保证 24 吗？还是说这个是 next_seg == 0, return 0 那里的情况？
 /*
 我不确定 reserve 和 generation_allocated 之间的大小有什么关系，但是我们明确的是会出现 allocation_pointer = old_loc, old_loc + size == generation_allocated，于是下面的验证变成了
   limit - ptr >= 24 + size <=> reserved/committed - old_ptr >= 24 + size <=> reserved/commited >= 24 + generation_allocated
@@ -20680,6 +20683,8 @@ retry:
 所以这个函数 return 0 并且 convert_to_pinned_p == false 一定发生在最后一个nonpinned plug上面。
 // TODO(JJ): 接下来这个我还没有验证，但是看起来这种情况下面后续的 should_expand check 一定会return true 所以会发生 ephemeral_heap_segment expand 而不是简单的 reloc 所以这里也不是要管了。
   虽然我感觉直接return old_loc也不是不可以吧。
+  A: 尚不确定一定会expand, 但是一定会 compact, 因为 ensure_gap_allocation 会 failed 导致 compact_no_gaps。看上去不会导致 heap expand, 拿这个 return 0 会不会导致最后一个 plug compact 出现问题？
+  想要repro的话感觉要看看alloc代码，有什么办法去alloc到接近segment end才触发GC
 */
         if (! (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, generation_allocation_pointer (gen),
                            generation_allocation_limit (gen), old_loc,
@@ -21021,7 +21026,7 @@ int gc_heap::joined_generation_to_condemn (BOOL should_evaluate_elevation,
 {
     gc_data_global.gen_to_condemn_reasons.init();
 #ifdef BGC_SERVO_TUNING
-    if (settings.entry_memory_load == 0)
+    if (settings.entry_memory_load == 0) // 这个在 heap#0 very start, 通过 init_mechanisms 初始为0，Q: 为什么要 == 0? 会多次调用吗？
     {
         uint32_t current_memory_load = 0;
         uint64_t current_available_physical = 0;
@@ -21410,7 +21415,7 @@ size_t gc_heap::get_total_generation_size (int gen_number)
 
 // gets all that's allocated into the gen. This is only used for gen2/3
 // for servo tuning.
-size_t gc_heap::get_total_servo_alloc (int gen_number)
+size_t gc_heap::get_total_servo_alloc (int gen_number) // gen_number or gen2/loh
 {
     size_t total_alloc = 0;
 
@@ -24064,7 +24069,7 @@ void gc_heap::allocate_for_no_gc_after_gc()
 #endif //MULTIPLE_HEAPS
     }
 }
-
+// just before 决定到底哪个generation
 void gc_heap::init_records()
 {
     // An option is to move this to be after we figure out which gen to condemn so we don't
@@ -32561,6 +32566,7 @@ allocate_in_condemned -> true
 
     generation*  older_gen = 0; // [gen2] 0, [gen0/1] 恒为condemned_gen+1
 // 这个命名非常的蠢，这个就是只是利用了generation去使用了它的 allocation_pointer/limit/segment，其他field全没有（dprint除外）,其实这里的关键是 consing_gen 包括了一个 allocation interval 而这个 interval 是 allocate_in_condemned 当前的分配区间。
+// allocation interval 会从 start_segment 开始在一个的heap_segment上爬行，直到ephemeral_segment，并且会跳过 pinned plug 的部分。
     generation* consing_gen = condemned_gen1;
     alloc_list  r_free_list [MAX_SOH_BUCKET_COUNT];
 
@@ -33174,6 +33180,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
                     if (!new_address)
                     { // 什么意思，没法找到新地址是合法情况？
 // A: 见 allocate_in_condemned_generations 中 size_fit_p 上面的注释，简单来说是当最后一个 plug 的时候，因为size_fit_p考虑了额外的pad所以会有可能找不到新地址。但这个时候预期（or肯定）会发生 heap expand，所以没关系。
+// heap expand 的一个 case 是 plan_allocated >
                         //verify that we are at then end of the ephemeral segment
                         assert (generation_allocation_segment (consing_gen) ==
                                 ephemeral_heap_segment);
@@ -33457,7 +33464,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
     }
 
     if (settings.condemned_generation == (max_generation - 1 ))
-    { // TBC: 是不是都仅仅是一些info collect
+    { // 统计 gen1 promote gen2 的一些信息到 maxgen_size_info, 似乎是用于 ETW?
         generation* older_gen = generation_of (settings.condemned_generation + 1);
         size_t rejected_free_space = generation_free_obj_space (older_gen) - r_free_obj_space;
         size_t free_list_allocated = generation_free_list_allocated (older_gen) - r_older_gen_free_list_allocated;
@@ -44631,6 +44638,14 @@ size_t gc_heap::decommit_ephemeral_segment_pages_step ()
 #endif //MULTIPLE_HEAPS
 
 //This is meant to be called by decide_on_compacting.
+/* 大概的思路是去看有多少free object，但感觉这个统计不太准确？
+frag 导致上等于
+sum of condemned_seg allocated (但是去掉了末尾所有garbage object, 因为这些sweep也可以free掉所以不算frag?)
+- sum of condemned_seg plan_allocated
+- sum of pinned plug gap
+可以理解为 sum of allocated 是之前所有 object 的 size 和，去掉末尾 garbage
+而 sum of plan_allocated 是所有 survivor 的 size 和，以及中间有一些gap，比如 short plug pad (这个不算frag), pinned plug pad (这个算frag)
+*/
 size_t gc_heap::generation_fragmentation (generation* gen,
                                           generation* consing_gen,
                                           uint8_t* end)
@@ -44667,7 +44682,7 @@ size_t gc_heap::generation_fragmentation (generation* gen,
         if (alloc <= heap_segment_allocated(ephemeral_heap_segment))
             frag = end - alloc;
         else
-        {
+        {//有可能吗？no survivor下，_allocated不是会设置成_mem(gen2), allocation_start(gen0/1)这时候不应该是 == 吗？
             // case when no survivors, allocated set to beginning
             frag = 0;
         }
@@ -45168,6 +45183,18 @@ size_t gc_heap::end_space_after_gc()
     return max ((dd_min_size (dynamic_data_of (0))/2), (END_SPACE_AFTER_GC_FL));
 }
 
+/*
+tuning_deciding_expansion:
+  if start < reserved - max( 2 min_size(gen0 + gen1), 2 min_size(gen1) + 2/3 desired(gen0) ): fit
+    如果剩余空间足够满足 gen0+gen1 的需求，fit
+  if gen0 plan_allocation == 0: not fit
+    不确定这个的可能性，毕竟 plan_generation_starts 里面会去确保，但是毕竟如果 aic 里面，有可能出现fit不了的情况，导致 generation_start 分配失败。
+  if pinned plug gap + reserved 前面的空间足够 gen0 的预期值 + 存在 85k 的 pinned plug gap: fit
+    应该是算上 gen0的 FL 空间大致够 gen0，而且 85k 的 object 都能分配，认为是fit的。
+  最低的要求是 reserved 剩下大概能 fit 下 max(1/2*min_size(gen0), 85024)
+tuning_deciding_compaction:
+  最后一个marked object之后（注意不是reloc而是原始位置）是否存在足够gen0大小的空间，在limit内允许commit more
+*/
 BOOL gc_heap::ephemeral_gen_fit_p (gc_tuning_point tp)
 {
     uint8_t* start = 0;
@@ -45217,8 +45244,8 @@ BOOL gc_heap::ephemeral_gen_fit_p (gc_tuning_point tp)
     {
         assert (settings.condemned_generation >= (max_generation-1));
         size_t gen0size = approximate_new_allocation();
-        size_t eph_size = gen0size;
-        size_t gen_min_sizes = 0;
+        size_t eph_size = gen0size; // == max( 2 min_size(gen0 + gen1), 2 min_size(gen1) + 2/3 desired(gen0) )
+        size_t gen_min_sizes = 0; // == 2 min_size(gen1)
 
         for (int j = 1; j <= max_generation-1; j++)
         {
@@ -45243,8 +45270,8 @@ BOOL gc_heap::ephemeral_gen_fit_p (gc_tuning_point tp)
             size_t end_seg = room;
 
             //look at the plug free space
-            size_t largest_alloc = END_SPACE_AFTER_GC_FL;
-            bool large_chunk_found = FALSE;
+            size_t largest_alloc = END_SPACE_AFTER_GC_FL; // 虽然这里使用了 85000 不过感觉这里还是比较启发式，真的改了threshold也问题不大，最多一些subtle的bug吧...
+            bool large_chunk_found = FALSE; // 这个只考虑了 pinned plug gap 没有考虑 reserved 前面的 gap
             size_t bos = 0;
             uint8_t* gen0start = generation_plan_allocation_start (youngest_generation);
             dprintf (3, ("ephemeral_gen_fit_p: gen0 plan start: %zx", (size_t)gen0start));
@@ -46549,8 +46576,8 @@ void gc_heap::background_sweep()
 }
 #endif //BACKGROUND_GC
 /*
-- generation_free_list_allocated -> 0: 这个是 compact 里面没有清零的，不知道会不会有问题 // TODO(JJ): 
-- generation_allocation_segment -> start_segment: 这个也是 compact 里面没有设置的。 // TODO(JJ): 
+- generation_free_list_allocated -> 0: 这个是 compact 里面没有清零的，不知道会不会有问题 A: 这个只有 gen1 promote gen2 和 loh 用到，而 gen1->gen2是cross-gc维护的。
+- generation_allocation_segment -> start_segment: 这个也是 compact 里面没有设置的。 A: 这个就是 consing_gen 的逻辑。
 - 其他的 freeable_uoh_segment, free_list_space, free_obj_space 和 compact_loh 相同。
 */
 void gc_heap::sweep_uoh_objects (int gen_num)

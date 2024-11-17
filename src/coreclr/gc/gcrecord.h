@@ -195,12 +195,12 @@ struct gc_generation_data
 
 struct maxgen_size_increase
 {
-    size_t free_list_allocated;
-    size_t free_list_rejected;
-    size_t end_seg_allocated;
-    size_t condemned_allocated;
-    size_t pinned_allocated;
-    size_t pinned_allocated_advance;
+    size_t free_list_allocated; // gen1 GC, gen1 promote gen2 有多少是从 gen2 的 free list 上面分配的。（不包括commit new page带来的free list）
+    size_t free_list_rejected; // gen1 GC, gen2 free object 有多少大小不够free_list而被直接 discard 的。
+    size_t end_seg_allocated; // gen1 GC, gen1 promote gen2 有多少是在 segment plan_allocated 或者是 new commit 的上面分配的。
+    size_t condemned_allocated; // gen1 promote GC, gen1 promote gen2 有多少没能在原来的gen2上分配，而分配到了gen1的空间上（当然最后会导致新的的gen2范围扩大）
+    size_t pinned_allocated; // 在强制promote gen1 pinned plug之前，有多少pinned plug promote到了gen2上。
+    size_t pinned_allocated_advance; // 强制promote gen1 pinned plug之后，有多少新的pinned plug promote到了gen2上。
     uint32_t running_free_list_efficiency;
 };
 

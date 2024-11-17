@@ -67,7 +67,7 @@ enum gc_reason
     reason_induced_noforce = 7, // it's an induced GC and doesn't have to be blocking.
     reason_gcstress = 8,        // this turns into reason_induced & gc_mechanisms.stress_induced = true
     reason_lowmemory_blocking = 9,
-    reason_induced_compacting = 10,
+    reason_induced_compacting = 10, // 待检查所有case，但是 GC.Collect(*, other than Aggressive, *, true) 是一个 case
     reason_lowmemory_host = 11,
 
     // https://devblogs.microsoft.com/dotnet/provisional-mode/
@@ -79,7 +79,7 @@ enum gc_reason
     reason_bgc_tuning_soh = 14,
     reason_bgc_tuning_loh = 15,
     reason_bgc_stepping = 16,
-    reason_induced_aggressive = 17,
+    reason_induced_aggressive = 17, // 待检查所有case，但是 GC.Collect(2, Aggressive) 是一个 case
     reason_max
 };
 

@@ -640,7 +640,7 @@ public:
     BOOL demotion;
     BOOL card_bundles; // 当 reserved memory 超过一定的 threshold 时，会开启 card bundle
     int  gen0_reduction_count;
-    BOOL should_lock_elevation;
+    BOOL should_lock_elevation; // case1: 当 high memory load，(但是fragment不够触发compact GC的时候设为 true或者gen1 allocation_start没有改善)
     int elevation_locked_count;
     BOOL elevation_reduced;
     BOOL minimal_gc;
@@ -3473,6 +3473,9 @@ private:
     // need to check in the allocator again.
     //
     // Set during a GC and checked by allocator after that GC
+// reset@init_records
+// case 1: set@ephemeral_gen_fit_p@deciding_compaction
+//   eph_seg reserved 剩下的空间不多，但是又足够 gen0 的预期值 + 存在 85k 的 gap
     PER_HEAP_FIELD_SINGLE_GC BOOL sufficient_gen0_space_p;
 
     // TODO: should just get rid of this for regions. // yes, they get rid of this in later version
@@ -3679,7 +3682,7 @@ private:
     // need to deduct the size from free_list_space.
     // Note that we should really move this and the free_list_space
     // accounting into the alloc_list class.
-    PER_HEAP_FIELD_SINGLE_GC size_t gen2_removed_no_undo; // reset to 0 @top@plan_phase
+    PER_HEAP_FIELD_SINGLE_GC size_t gen2_removed_no_undo; // reset to 0 @top@plan_phase 当aio fit 到 gen2 bucket0 之后，这个free_list_item就是removed no undo
 
 #define INVALID_SAVED_PINNED_PLUG_INDEX ((size_t)~0)
 
@@ -4900,7 +4903,7 @@ size_t& dd_freach_previous_promotion (dynamic_data* inst)
 {
   return inst->freach_previous_promotion;
 }
-inline
+inline // GC init时为 == min_size
 size_t& dd_desired_allocation (dynamic_data* inst)
 {
   return inst->desired_allocation;
@@ -5774,6 +5777,7 @@ inline // [gen1 GC] for all gen2 segments excep ephemeral -> _allocated @top@pla
 // [gen2 GC] all segments -> _mem @top@plan_phase
 // during plug planning allocate_in_condemned: allocation interval第一次碰到一个seg会->committed，离开seg->allocation_pointer
 // 在 gen1 promote, allocate_in_older 如果 free list 中没有找到空间，从 seg 末尾拿 commit 前的空间的话, _allocated -> committed
+// 对于 eph_seg 在 plan_generation_starts 中设置到所有plug(包括pinned)处理完之后的allocation_pointer
 uint8_t*& heap_segment_plan_allocated (heap_segment* inst)
 {
   return inst->plan_allocated;
