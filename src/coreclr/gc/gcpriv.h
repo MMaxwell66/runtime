@@ -632,12 +632,12 @@ class gc_mechanisms
 public:
     VOLATILE(size_t) gc_index; // starts from 1 for the first GC, like dd_collection_count
     int condemned_generation; // 可能值有：max_generation(2)
-    BOOL promotion; // 如果是gen2 GC 或者 gen0/gen1 GC时 higher gen size太小 || <=当前gen存活size太大
+    BOOL promotion; // 如果是gen2 GC 或者 gen0/gen1 GC时 higher gen size太小 || <=当前gen存活size太大 || 决定使用 sweep GC
     BOOL compaction;
     BOOL loh_compaction;
     BOOL heap_expansion;
     uint32_t concurrent; // this GC is BGC // decide after joined_generation_to_condemn
-    BOOL demotion;
+    BOOL demotion; // 如果发生了 pinned plug demotion
     BOOL card_bundles; // 当 reserved memory 超过一定的 threshold 时，会开启 card bundle
     int  gen0_reduction_count;
     BOOL should_lock_elevation; // case1: 当 high memory load，(但是fragment不够触发compact GC的时候设为 true或者gen1 allocation_start没有改善)
@@ -3553,6 +3553,7 @@ private:
     // info on how big the plugs are for best fit which we
     // don't do in plan phase.
     // TODO: get rid of total_ephemeral_plugs.
+// 我不好说这个的准确性，因为计算过程中甚至是 * (1000.0/976) 的，这个准确度感觉就不好说了，只能说是估计
     PER_HEAP_FIELD_SINGLE_GC size_t total_ephemeral_size; // reset to 0 @top@plan_phase
 #endif //!USE_REGIONS
 
@@ -4136,7 +4137,7 @@ private:
 
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL proceed_with_gc_p; // false due to no GC region
 
-    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool maxgen_size_inc_p; // reset to false @top@mark_phase
+    PER_HEAP_ISOLATED_FIELD_SINGLE_GC bool maxgen_size_inc_p; // reset to false @top@mark_phase // -> true@plan_phase if gen1 promote GC, 然后 gen2 commit new page / gen2 末尾向 gen1 延申了
 
     // gc reason: reason_lowmemory reason || reason_lowmemory_blocking || gc_heap::latency_level == latency_level_memory_footprint
     PER_HEAP_ISOLATED_FIELD_SINGLE_GC BOOL g_low_memory_status;
@@ -4289,6 +4290,7 @@ private:
 
     // It's maintained but only till the very next GC. When this is set in a GC, it will be cleared
     // in the very next GC done with garbage_collect_pm_full_gc.
+// case1: gen1 promote pm GC, gen2 的大小增加了
     PER_HEAP_ISOLATED_FIELD_MAINTAINED bool pm_trigger_full_gc;
 
     // This is the smoothed *total* budget, i.e. across *all* heaps. Only used in a join.
@@ -5666,6 +5668,8 @@ uint8_t*& heap_segment_decommit_target (heap_segment* inst)
 }
 inline
 // [LOH]: 在GC过程中会被设置成 plan_allocated - 8, 而且只增不减（除非是decommit，会设置成new committed）而且没怎么似乎没怎么被用到？需要确认由于什么地方了。
+// [LOH]: 如果 segment 被 free 了，但是被囤积为后续使用，这个值会被设置成 decommit 末尾 page 的new committed @decommit_heap_segment
+// TODO(JJ): 用途确认
 uint8_t*& heap_segment_used (heap_segment* inst)
 {
   return inst->used;

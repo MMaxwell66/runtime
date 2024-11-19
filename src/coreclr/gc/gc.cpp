@@ -5874,6 +5874,7 @@ static size_t get_valid_segment_size (BOOL large_seg=FALSE)
 
 #ifndef USE_REGIONS
 void
+//估计GC之后gen0/1的size，考虑了 gen start, pad, short plug 之类的，但准确性不太好确定，因为有浮点运算这类的
 gc_heap::compute_new_ephemeral_size()
 {
     int eph_gen_max = max_generation - 1 - (settings.promotion ? 1 : 0);
@@ -9627,7 +9628,7 @@ int gc_heap::grow_brick_card_tables (uint8_t* start,
             else
 #endif // HOST_64BIT
                 ps *= 2;
-
+// 这里什么玩意儿啊，ps是length你比啥呢，这个都是 triple span了，哪像你上面说的 double 啊！！！
             if (saved_g_lowest_address < g_gc_lowest_address)
             {
                 if (ps > (size_t)g_gc_lowest_address)
@@ -20683,8 +20684,12 @@ retry:
 所以这个函数 return 0 并且 convert_to_pinned_p == false 一定发生在最后一个nonpinned plug上面。
 // TODO(JJ): 接下来这个我还没有验证，但是看起来这种情况下面后续的 should_expand check 一定会return true 所以会发生 ephemeral_heap_segment expand 而不是简单的 reloc 所以这里也不是要管了。
   虽然我感觉直接return old_loc也不是不可以吧。
-  A: 尚不确定一定会expand, 但是一定会 compact, 因为 ensure_gap_allocation 会 failed 导致 compact_no_gaps。看上去不会导致 heap expand, 拿这个 return 0 会不会导致最后一个 plug compact 出现问题？
+  A: 尚不确定一定会expand, 但是一定会 compact, 因为 decide_on_compacting 中 dt_low_ephemeral_space_p (tuning_deciding_compaction) 一定会返回 true 导致 compact。
+  但 heap expand 还是不好说，因为那里判断 low_eph 用的是 plan_allocated 这个是最后一个放不下 plug + pad 的 plug开始位置，所以取决于 plug 的最大大小和 low_eph check 中的逻辑。
+  这个取决于alloc逻辑，以及 loh threshold （这个可以修改有可能导致问题）。
+  如果没有 heap expand, 这个 return 0 会不会导致最后一个 plug compact 出现问题？
   想要repro的话感觉要看看alloc代码，有什么办法去alloc到接近segment end才触发GC
+  ... 甚至好像有可能 heap expand 会被否决掉，如果没有新的 segment 了，见 gc_policy 处的逻辑。
 */
         if (! (size_fit_p (size REQD_ALIGN_AND_OFFSET_ARG, generation_allocation_pointer (gen),
                            generation_allocation_limit (gen), old_loc,
@@ -32317,7 +32322,8 @@ inline void save_allocated(heap_segment* seg)
 #pragma warning(push)
 #pragma warning(disable:21000) // Suppress PREFast warning about overly large function
 #endif //_PREFAST_
-// TODO(JJ): plan phase 有类似于 mark_steal 这种 steal机制吗？因为mark object的并发做的限制很低，会有重复，而plan phase发生这种重复就是致命的了，steal机制应该会更难做。
+// Q: plan phase 有类似于 mark_steal 这种 steal机制吗？因为mark object的并发做的限制很低，会有重复，而plan phase发生这种重复就是致命的了，steal机制应该会更难做。
+// A: 并没有，在join之前只做了当前heap的plan+sweep_uoh(if !loh_compaction)
 // TODO(JJ): 另一个要看的case就是所有 condemned object 都是 garbage 的情况。
 void gc_heap::plan_phase (int condemned_gen_number)
 {
@@ -33619,7 +33625,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
     if (gc_t_join.joined())
     {
 #ifndef USE_REGIONS
-        //safe place to delete large heap segments
+        //safe place to delete large heap segments // 因为可能会 reuse segment -> segment_standby_list (static), 但是其实完全可以用无锁队列实现嘛, interlocked 一下就好了。
         if (condemned_gen_number == max_generation)
         {
             for (int i = 0; i < n_heaps; i++)
@@ -33634,7 +33640,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 #endif //BACKGROUND_GC
             )
         {
-            pm_trigger_full_gc = true;
+            pm_trigger_full_gc = true; // 这里的 should_expand/compact 是在 join 之后去改写的
             dprintf (GTC_LOG, ("in PM: maxgen size inc, doing a sweeping gen1 and trigger NGC2"));
         }
         else
@@ -33646,7 +33652,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 #endif //USE_REGIONS
             int pol_max = policy_sweep;
 #ifdef GC_CONFIG_DRIVEN
-            BOOL is_compaction_mandatory = FALSE;
+            BOOL is_compaction_mandatory = FALSE; // 不是所有之前 should_compact 都是强制的，有个predefined list
 #endif //GC_CONFIG_DRIVEN
 
             int i;
@@ -33683,6 +33689,8 @@ generation_allocation_pointer += generation_plan_allocation_start_size
             {
                 // If compaction is not mandatory we can feel free to change it to a sweeping GC.
                 // Note that we may want to change this to only checking every so often instead of every single GC.
+// 涉及到 config: GCCompactRatio 甚至会发生 sweep GC -> compact GC 的可能性，如果 sweep GC 次数太多。
+// 默认不修改
                 if (should_do_sweeping_gc (pol_max >= policy_compact))
                 {
                     pol_max = policy_sweep;
@@ -33712,7 +33720,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
                 if (g_heaps[i]->gc_policy == policy_expand)
                 {
                     g_heaps[i]->new_heap_segment =
-                        g_heaps[i]->soh_get_segment_to_expand();
+                        g_heaps[i]->soh_get_segment_to_expand(); // 包括复杂的逻辑去重用 gen2 中的一些 segment
                     if (!g_heaps[i]->new_heap_segment)
                     {
                         set_expand_in_full_gc (condemned_gen_number);
@@ -33758,8 +33766,8 @@ generation_allocation_pointer += generation_plan_allocation_start_size
         gc_t_join.restart();
     }
 
-    should_compact = (gc_policy >= policy_compact);
-    should_expand  = (gc_policy >= policy_expand);
+    should_compact = (gc_policy >= policy_compact); // 这个每个heap统一
+    should_expand  = (gc_policy >= policy_expand); // 这个是有可能每个heap不同的
 
 #else //MULTIPLE_HEAPS
 #ifndef USE_REGIONS
@@ -33863,7 +33871,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
     if (!pm_trigger_full_gc && pm_stress_on && provisional_mode_triggered)
     {
         if ((settings.condemned_generation == (max_generation - 1)) &&
-            ((settings.gc_index % 5) == 0)
+            ((settings.gc_index % 5) == 0) // 这个是不是不是太好，万一触发pm的时候正好 gc_index % 5 == 4 之类的。
 #ifdef BACKGROUND_GC
             && !is_bgc_in_progress()
 #endif //BACKGROUND_GC
@@ -42677,7 +42685,7 @@ BOOL gc_heap::process_free_space (heap_segment* seg,
     }
     return FALSE;
 }
-
+// TODO(JJ): 这里的代码量比预想的多
 BOOL gc_heap::can_expand_into_p (heap_segment* seg, size_t min_free_size, size_t min_cont_size,
                                  allocator* gen_allocator)
 {
@@ -50420,7 +50428,7 @@ BOOL gc_heap::should_do_sweeping_gc (BOOL compact_p)
     {
         if (compact_p)
         {
-            int temp_ratio = (int)((compact_count + 1) * 100 / (total_count + 1));
+            int temp_ratio = (int)((compact_count + 1) * 100 / (total_count + 1)); // 这里运行时间长了是不是会溢出...
             if (temp_ratio > compact_ratio)
             {
                 // cprintf (("compact would be: %d, total_count: %d, ratio would be %d%% > target\n",

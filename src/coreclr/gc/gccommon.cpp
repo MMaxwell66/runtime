@@ -41,6 +41,7 @@ VOLATILE(int32_t) g_fSuspensionPending = 0;
 uint32_t* g_gc_card_bundle_table;
 #endif
 
+// case 1 在 grow_brick_card_tables 中扩展
 uint8_t* g_gc_lowest_address  = 0;
 uint8_t* g_gc_highest_address = 0;
 GCHeapType g_gc_heap_type = GC_HEAP_INVALID;

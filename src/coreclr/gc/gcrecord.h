@@ -217,8 +217,8 @@ enum gc_heap_expand_mechanism
     expand_reuse_normal = 0,
     expand_reuse_bestfit = 1,
     expand_new_seg_ep = 2, // new seg with ephemeral promotion
-    expand_new_seg = 3,
-    expand_no_memory = 4, // we can't get a new seg.
+    expand_new_seg = 3, // 成功 expand heap
+    expand_no_memory = 4, // we can't get a new seg. // 想要 expand heap 但是 OOM
     expand_next_full_gc = 5,
     max_expand_mechanisms_count = 6
 };
@@ -307,7 +307,7 @@ enum gc_mechanism_per_heap
 enum gc_mechanism_bit_per_heap
 {
     gc_mark_list_bit = 0, // 这个 heap 在这个 GC 有没有使用 mark list 加速 plan phase?
-    gc_demotion_bit = 1,
+    gc_demotion_bit = 1, // 有任意的 heap 发生了 pinned plug demotion
     max_gc_mechanism_bits_count = 2
 };
 
