@@ -3860,6 +3860,7 @@ private:
     // Used in allocator code path. Blocking GCs do use it at the beginning (to update heap_segment_allocated) and
     // at the end they get initialized for the allocator.
     // 似乎只考虑了gen0？把它特别拿出来有什么意义？
+// 在sweep gc之后设置为 generation_start(gen0) + 24
     PER_HEAP_FIELD_MAINTAINED_ALLOC uint8_t* alloc_allocated;
 
     // For regions this is the region we currently allocate in. Set by a blocking GC at the end.
@@ -4330,7 +4331,7 @@ private:
     PER_HEAP_ISOLATED_FIELD_MAINTAINED heap_segment* segment_standby_list;
 
     // Set in one GC and updated in the next GC.
-    PER_HEAP_ISOLATED_FIELD_MAINTAINED BOOL should_expand_in_full_gc;
+    PER_HEAP_ISOLATED_FIELD_MAINTAINED BOOL should_expand_in_full_gc; // 大概是gen0/1想要expand heap但是OOM了，所以等待下一个full GC再去expand
 #endif //USE_REGIONS
 
 #ifdef DYNAMIC_HEAP_COUNT
@@ -5014,7 +5015,7 @@ inline // 对于 gen2 看上去是第一个非 readonly seg 的开头object，�
 // 这个 free object 对于 loh/poh 一定是 24B 但是对于 uoh 这个不一定是 24B，有可能在 [24B, 48B)，见 `plan_generation_start`
 // 然后，>= 这个的第一个非free obj之前有 32B 的plug_and_gap空间会在plan_phase被写入。也就是说要不这个一开始是个free object，或者segment开头的地方reserve了一个 plug_and_gap 的空间。
 // during@plan_phase 要求 keep value
-// after@plan_phase 会从 generation_plan_allocation_start update this
+// after@compact_phase@generation_plan_allocation_start 会从 generation_plan_allocation_start update this
 uint8_t*& generation_allocation_start (generation* inst)
 {
   return inst->allocation_start;
@@ -5116,6 +5117,18 @@ size_t& generation_free_list_space (generation* inst)
   return inst->free_list_space;
 }
 inline // 不一定是 free obj < min_free_list, 在 adjust_limit 那里有一个比较莫名的可能是启发式的逻辑，是的这个有可能统计了一些 free object < 72B
+/* 而且有可能会大于实际值，因为sweep GC的时候 pinned_plug pre/post_plug_info 不会完整的deduce掉，导致这个值会比实际值大。可能会导致一些fragment统计值上升
+repro:
+gen1:
+24 free
+gen0:
+24 free
+24 pinned
+24 extend, post plug
+24 normal, pre plug
+24 pinned
+这样GC之后 free_obj_space(gen1) = 0x48 大于实际值 0x18
+*/
 size_t& generation_free_obj_space (generation* inst)
 {
   return inst->free_obj_space;
@@ -5166,7 +5179,7 @@ size_t& generation_condemned_allocated (generation* inst)
 {
     return inst->condemned_allocated;
 }
-inline
+inline // sweep GC 的时候有多少 size 的 object promote(也就是condemned gen所有survived size) 到了older gen
 size_t& generation_sweep_allocated (generation* inst)
 {
     return inst->sweep_allocated;

@@ -2018,7 +2018,7 @@ uint8_t* gc_heap::pad_for_alignment_large (uint8_t* newAlloc, int requiredAlignm
 
 #define END_SPACE_AFTER_GC (loh_size_threshold + MAX_STRUCTALIGN)
 // When we fit into the free list we need an extra of a min obj
-#define END_SPACE_AFTER_GC_FL (END_SPACE_AFTER_GC + Align (min_obj_size)) /* 85024 */
+#define END_SPACE_AFTER_GC_FL (END_SPACE_AFTER_GC + Align (min_obj_size)) /* loh_size_threshold + 24 */
 
 #if defined(BACKGROUND_GC) && !defined(USE_REGIONS)
 #define SEGMENT_INITIAL_COMMIT (2*OS_PAGE_SIZE)
@@ -7543,6 +7543,7 @@ public:
     uint8_t* first; // pin plug start
     size_t len; // pin plug len
 // TODO(JJ): 这里 带不带 _reloc 后缀的使用场景的区别是什么？
+// 好像是 不带用于 sweep GC, 否则用于 compact GC, 可能区别在于 compact GC 要先 reloc 然后 compact?
     // If we want to save space we can have a pool of plug_and_gap's instead of
     // always having 2 allocated for each pinned plug.
     gap_reloc_pair saved_pre_plug; // 24B pinned plug 前一个 object true range最后 24B，如果包括了 MT, MT 最后的 bits 会全清。
@@ -8010,7 +8011,7 @@ void gc_heap::fix_older_allocation_area (generation* older_gen)
 {
     heap_segment* older_gen_seg = generation_allocation_segment (older_gen);
     if (generation_allocation_limit (older_gen) !=
-        heap_segment_plan_allocated (older_gen_seg))
+        heap_segment_plan_allocated (older_gen_seg)) // TODO(JJ): Q: 如果 gen2的 seg commit more 了，limit 是 plan 之前的值，一定 != 那么新commit 的 space怎么办？
     {
         uint8_t*  point = generation_allocation_pointer (older_gen);
 
@@ -8036,9 +8037,9 @@ void gc_heap::fix_older_allocation_area (generation* older_gen)
     else
     {
         assert (older_gen_seg != ephemeral_heap_segment);
-        heap_segment_plan_allocated (older_gen_seg) =
+        heap_segment_plan_allocated (older_gen_seg) = // 这个感觉是说在 GC 之后把seg末尾的free的allocation interval之间丢掉
             generation_allocation_pointer (older_gen);
-        generation_allocation_limit (older_gen) =
+        generation_allocation_limit (older_gen) = // 这行没太大意义，下面被 -> 0
             generation_allocation_pointer (older_gen);
     }
 
@@ -12762,7 +12763,7 @@ void gc_heap::rearrange_heap_segments(BOOL compacting)
                 !heap_segment_read_only_p (seg))
             {
                 //if not, unthread and delete
-                assert (prev_seg);
+                assert (prev_seg); // 这里凭什么假设不是第一个 seg? 应该是因为至少有generation start
                 assert (seg != ephemeral_heap_segment);
                 heap_segment_next (prev_seg) = next_seg;
                 delete_heap_segment (seg, GCConfig::GetRetainVM());
@@ -16534,7 +16535,7 @@ void allocator::copy_to_alloc_list (alloc_list* toalist)
 #endif //FL_VERIFICATION
     }
 }
-
+// key logic: free_list_slot = free_list_undo; free_list_undo = UNDO_EMPTY
 void allocator::copy_from_alloc_list (alloc_list* fromalist)
 {
     BOOL repair_list = !discard_if_no_fit_p ();
@@ -16579,7 +16580,7 @@ void allocator::copy_from_alloc_list (alloc_list* fromalist)
             //items may have been unlinked.
             uint8_t* free_item = alloc_list_head_of (i);
 
-            while (free_item && count)
+            while (free_item && count) // 这个 count 是为了提速吗，不过也是，push的都是前面的，有可能可以优化不少。
             {
                 assert (((CObjectHeader*)free_item)->IsFree());
                 if ((free_list_undo (free_item) != UNDO_EMPTY))
@@ -34265,7 +34266,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
         settings.compaction = FALSE;
 
 #ifdef USE_REGIONS
-        // This should be set for segs too actually. We should always reset demotion
+        // This should be set for segs too actually. We should always reset demotion 说的没错！
         // if we sweep.
         settings.demotion = FALSE;
 #endif //USE_REGIONS
@@ -34321,7 +34322,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
         if ((condemned_gen_number < max_generation))
         {
             // Fix the allocation area of the older generation
-            fix_older_allocation_area (older_gen);
+            fix_older_allocation_area (older_gen); // 好像是把原来的 GC 之前的 allocation interval 要么丢掉（在seg末尾的情况）要么插入到 free list 中去。
         }
 
         GCToEEInterface::DiagWalkSurvivors(__this, false);
@@ -34329,7 +34330,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
         make_free_lists (condemned_gen_number);
         size_t total_recovered_sweep_size = recover_saved_pinned_info();
         if (total_recovered_sweep_size > 0)
-        {
+        {// 这里也没记录 gen1的pinned->gen2的pre_post plug 所以这个 free_obj_size 有可能回大于实际值，不确定影响多大
             generation_free_obj_space (generation_of (max_generation)) -= total_recovered_sweep_size;
             dprintf (2, ("h%d: deduct %zd for pin, fo->%zd",
                 heap_number, total_recovered_sweep_size,
@@ -34369,7 +34370,7 @@ generation_allocation_pointer += generation_plan_allocation_start_size
 #ifdef MULTIPLE_HEAPS
                 for (int i = 0; i < n_heaps; i++)
                 {
-                    g_heaps[i]->rearrange_heap_segments(FALSE);
+                    g_heaps[i]->rearrange_heap_segments(FALSE); // 删除空的segment, 如果expand新建/重用了heap，调整一下位置。
                 }
 #else
                 rearrange_heap_segments(FALSE);
@@ -35394,14 +35395,14 @@ void gc_heap::make_free_lists (int condemned_gen_number)
 #else
         args.free_list_gen_number = get_plan_gen_num (current_gen_num);
 #endif //USE_REGIONS
-        args.free_list_gen = generation_of (args.free_list_gen_number);
+        args.free_list_gen = generation_of (args.free_list_gen_number); // lower gen 的 free list 在 plan_phase top 已经被 clear 了
         args.highest_plug = 0;
 
 #ifdef USE_REGIONS
         dprintf (REGIONS_LOG, ("starting at gen%d %p -> %p", i, start_address, end_address));
 #else
-        args.current_gen_limit = (((current_gen_num == max_generation)) ?
-                                  MAX_PTR :
+        args.current_gen_limit = (((current_gen_num == max_generation)) ? // gen2: ~0 gen1: allocation_start(gen0)(before GC) gen0: eph_heap_reserved
+                                  MAX_PTR : // 这个 MAX_PTR 是为了让 make_free_list_in_brick 中的逻辑同时 handle 掉给 gen2 分配 generation_start 的逻辑
                                   (generation_limit (args.free_list_gen_number)));
 #endif //USE_REGIONS
 
@@ -35418,7 +35419,7 @@ void gc_heap::make_free_lists (int condemned_gen_number)
             {
 #ifndef USE_REGIONS
                 if (args.current_gen_limit == MAX_PTR)
-                {
+                { // 为什么不直接扔掉这个 heap 呢？
                     //We had an empty segment
                     //need to allocate the generation start
                     generation* gen = generation_of (max_generation);
@@ -35456,15 +35457,15 @@ void gc_heap::make_free_lists (int condemned_gen_number)
                 int brick_entry =  brick_table [ current_brick ];
                 if ((brick_entry >= 0))
                 {
-                    make_free_list_in_brick (brick_address (current_brick) + brick_entry-1, &args);
+                    make_free_list_in_brick (brick_address (current_brick) + brick_entry-1, &args); // 除了 thread_gap以外，还包括了 sweep 下面 generation_start 的创建逻辑 以及 clear bit
                     dprintf(3,("Fixing brick entry %zx to %zx",
                             current_brick, (size_t)args.highest_plug));
                     set_brick (current_brick,
-                            (args.highest_plug - brick_address (current_brick)));
+                            (args.highest_plug - brick_address (current_brick))); // 注意是 highest plug 不是 highest object
                 }
                 else
                 {
-                    if ((brick_entry > -32768))
+                    if ((brick_entry > -32768)) // set_brick 中会 clamp 到 -32767，所以恒成立？
                     {
 #ifdef _DEBUG
                         ptrdiff_t offset = brick_of (args.highest_plug) - current_brick;
@@ -35474,6 +35475,7 @@ void gc_heap::make_free_lists (int condemned_gen_number)
                         }
 #endif //_DEBUG
                         //init to -1 for faster find_first_object
+// 设置成-1是因为plan_phase中处理的是plug，而find_fist_object是object,这个brick有可能有object start,需要设置成-1，后续再fix Q: 这个fix是在sweep/compact中发生的，还是在find_first_object中发生的？
                         set_brick (current_brick, -1);
                     }
                 }
@@ -35522,7 +35524,7 @@ void gc_heap::make_free_list_in_brick (uint8_t* tree, make_free_args* args)
     {
         int  right_node = node_right_child (tree);
         int left_node = node_left_child (tree);
-        args->highest_plug = 0;
+        args->highest_plug = 0; // 有点没必要
         if (! (0 == tree))
         {
             if (! (0 == left_node))
@@ -35540,7 +35542,7 @@ void gc_heap::make_free_list_in_brick (uint8_t* tree, make_free_args* args)
                 if (is_plug_padded (plug))
                 {
                     dprintf (3, ("%p padded", plug));
-                    clear_plug_padded (plug);
+                    clear_plug_padded (plug); // Q: 除了在 plan_phase 中统计 dd_padding_size 外还有什么地方是非 debug 需要的？ compact phase 中那边一定要吗？不然的和可以优化掉这个bit感觉。
                 }
 #endif //SHORT_PLUGS
 
@@ -35561,22 +35563,23 @@ void gc_heap::make_free_list_in_brick (uint8_t* tree, make_free_args* args)
 #ifndef USE_REGIONS
             gen_crossing:
                 {
-                    if ((args->current_gen_limit == MAX_PTR) ||
+                    if ((args->current_gen_limit == MAX_PTR) || // gen2, gen1 (plug in gen0)
                         ((plug >= args->current_gen_limit) &&
                          ephemeral_pointer_p (plug)))
                     {
                         dprintf(3,(" Crossing Generation boundary at %zx",
                                (size_t)args->current_gen_limit));
                         if (!(args->current_gen_limit == MAX_PTR))
-                        {
+                        { // gen1 GC, find gen0 plug
                             args->free_list_gen_number--;
-                            args->free_list_gen = generation_of (args->free_list_gen_number);
+                            args->free_list_gen = generation_of (args->free_list_gen_number); // lower gen 的 free list 在 plan_phase top 已经被 clear 了
                         }
                         dprintf(3,( " Fixing generation start of %d to: %zx",
                                 args->free_list_gen_number, (size_t)gap));
-
+// sweep phase 的 plan_allocation_start
+// 注意这里不会在意 allocate_first_generation_start 中分配的 start, 因为 plug gap size 是不管那个free object的。
                         reset_allocation_pointers (args->free_list_gen, gap);
-                        args->current_gen_limit = generation_limit (args->free_list_gen_number);
+                        args->current_gen_limit = generation_limit (args->free_list_gen_number); // 这个时候 gen2 -> generation_start(gen0)
 
                         if ((gap_size >= (2*Align (min_obj_size))))
                         {
@@ -35587,7 +35590,7 @@ void gc_heap::make_free_list_in_brick (uint8_t* tree, make_free_args* args)
                             gap = (gap + Align(min_obj_size));
                         }
                         else
-                        {
+                        { // 连续跨多个gen应该是靠原有的generation_start保证不会出现在前面的gen发生 gap_size == 0，这个就不详细证明了。
                             make_unused_array (gap, gap_size);
                             gap_size = 0;
                         }
@@ -51984,7 +51987,7 @@ CFinalize::MoveItem (Object** fromIndex,
                      unsigned int fromSeg,
                      unsigned int toSeg)
 {
-
+// <-: 和当前seg第一个交换位置，然后和前面seg的第一个逐一交换位置; ->: 和当前seg最后一个交换位置，然后和后面seg最后一个逐一交换位置
     int step;
     ASSERT (fromSeg != toSeg);
     if (fromSeg > toSeg)
@@ -51997,7 +52000,7 @@ CFinalize::MoveItem (Object** fromIndex,
     {
         Object**& destFill = m_FillPointers[i+(step - 1 )/2];
         Object** destIndex = destFill - (step + 1)/2;
-        if (srcIndex != destIndex)
+        if (srcIndex != destIndex) // 不仅handle了fromIndex一开始就在当前seg的start/end，也handle了某个seg为空的情况。
         {
             Object* tmp = *srcIndex;
             *srcIndex = *destIndex;
@@ -52182,11 +52185,12 @@ void
 CFinalize::UpdatePromotedGenerations (int gen, BOOL gen_0_empty_p)
 {
     dprintf(3, ("UpdatePromotedGenerations gen=%d, gen_0_empty_p=%d", gen, gen_0_empty_p));
-
+// 我们知道registry的object会被放在gen0的seg下，但是这里的逻辑可以cover，如果 all promote, 那么re-registry的object会前进一个gen，不影响我们每个seg的object's gen >= gen(seg)的假设
+// 如果不是 all promote，那么甚至re-registry的object会之前放到它所应该处于的gen，完全合规！
     // update the generation fill pointers.
     // if gen_0_empty is FALSE, test each object to find out if
     // it was promoted or not
-    if (gen_0_empty_p)
+    if (gen_0_empty_p) // 这个更应该叫做 all promote 而不是 gen0 empty
     {
         for (int i = min (gen+1, max_generation); i > 0; i--)
         {
